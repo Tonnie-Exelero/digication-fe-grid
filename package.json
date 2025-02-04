@@ -9,7 +9,9 @@
     "start": "NODE_ENV=development webpack serve",
     "lint": "eslint --ext .ts,.tsx src tests",
     "tsc": "tsc",
-    "test": "NODE_ENV=test jest --config ./jest.config.js --verbose"
+	"test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:watch": "jest --watch"
   },
   "dependencies": {
     "@emotion/react": "^11.5.0",
@@ -24,6 +26,9 @@
     "react-use": "^17.3.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.1",
     "@types/jest": "^27.0.2",
     "@types/react-dom": "^17.0.10",
     "@typescript-eslint/eslint-plugin": "^5.2.0",
@@ -37,7 +42,10 @@
     "eslint-plugin-react-hooks": "^4.2.0",
     "html-webpack-plugin": "^5.5.0",
     "jest": "^27.3.1",
+    "jest-canvas-mock": "^2.5.2",
+    "jest-environment-jsdom": "^27.3.1",
     "prettier": "^2.4.1",
+    "react-dnd-test-utils": "^16.0.1",
     "ts-jest": "^27.0.7",
     "ts-loader": "^9.2.6",
     "ts-node": "^10.4.0",

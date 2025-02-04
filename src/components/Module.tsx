@@ -1,91 +1,111 @@
-import React from 'react';
-import { Box } from '@mui/material';
-import { useDrag, useDragDropManager } from 'react-dnd';
-import { useRafLoop } from 'react-use';
+import React from "react";
+import { Box } from "@mui/material";
+import { useDrag, useDragDropManager } from "react-dnd";
+import { useRafLoop } from "react-use";
 
-import ModuleInterface from '../types/ModuleInterface';
-import { moduleW2LocalWidth, moduleX2LocalX, moduleY2LocalY } from '../helpers';
+import ModuleInterface from "../types/ModuleInterface";
+import { COLUMN_WIDTH, GUTTER_SIZE, NUM_COLUMNS } from "../constants";
+import { checkCollision } from "../helpers";
 
 type ModuleProps = {
   data: ModuleInterface;
+  otherModules: ModuleInterface[];
+  onDrag: (id: number, newX: number, newY: number) => void;
 };
 
 const Module = (props: ModuleProps) => {
-  const { data: { id, coord: { x, y, w, h } } } = props;
-
-  // Transform x, y to left, top
-  const [{ top, left }, setPosition] = React.useState(() => ({
-    top: moduleY2LocalY(y),
-    left: moduleX2LocalX(x),
-  }));
+  const {
+    data: {
+      id,
+      coord: { x, y, w, h },
+    },
+    otherModules,
+    onDrag,
+  } = props;
+  const [visualPosition, setVisualPosition] = React.useState({
+    left: x * COLUMN_WIDTH + GUTTER_SIZE,
+    top: y + GUTTER_SIZE,
+  });
 
   const dndManager = useDragDropManager();
   const initialPosition = React.useRef<{ top: number; left: number }>();
 
-  // Use request animation frame to process dragging
+  React.useEffect(() => {
+    setVisualPosition({
+      left: x * COLUMN_WIDTH + GUTTER_SIZE,
+      top: y + GUTTER_SIZE,
+    });
+  }, [x, y]);
+
   const [stop, start] = useRafLoop(() => {
     const movement = dndManager.getMonitor().getDifferenceFromInitialOffset();
 
-    if (!initialPosition.current || !movement) {
-      return;
-    }
+    if (!initialPosition.current || !movement) return;
 
-    // Update new position of the module
-    setPosition({
-      top: initialPosition.current.top + movement.y,
-      left: initialPosition.current.left + movement.x,
-    });
+    const newLeftPx = initialPosition.current.left + movement.x;
+    const newTopPx = initialPosition.current.top + movement.y;
+
+    const newX = Math.round((newLeftPx - GUTTER_SIZE) / COLUMN_WIDTH);
+    const clampedX = Math.max(0, Math.min(newX, NUM_COLUMNS - w));
+
+    const newY = newTopPx - GUTTER_SIZE;
+    const clampedY = Math.max(newY, 0);
+
+    const currentModule = { id, coord: { x: clampedX, y: clampedY, w, h } };
+    const isColliding = checkCollision(currentModule, otherModules);
+
+    if (!isColliding) {
+      setVisualPosition({
+        left: clampedX * COLUMN_WIDTH + GUTTER_SIZE,
+        top: clampedY + GUTTER_SIZE,
+      });
+      onDrag(id, clampedX, clampedY);
+    }
   }, false);
 
-  // Wire the module to DnD drag system
-  const [, drag] = useDrag(() => ({
-    type: 'module',
-    item: () => {
-      // Track the initial position at the beginning of the drag operation
-      initialPosition.current = { top, left };
-
-      // Start raf
-      start();
-      return { id };
-    },
-    end: stop,
-  }), [top, left]);
+  const [, drag] = useDrag(
+    () => ({
+      type: "module",
+      item: () => {
+        initialPosition.current = {
+          left: visualPosition.left,
+          top: visualPosition.top,
+        };
+        start();
+        return { id };
+      },
+      end: stop,
+    }),
+    [visualPosition.left, visualPosition.top]
+  );
 
   return (
     <Box
       ref={drag}
-      display="flex"
+      data-testid={`module-${id}`}
       position="absolute"
       border={1}
       borderColor="grey.500"
-      padding="10px"
       bgcolor="rgba(0, 0, 0, 0.5)"
-      top={top}
-      left={left}
-      width={moduleW2LocalWidth(w)}
+      top={visualPosition.top}
+      left={visualPosition.left}
+      width={w * COLUMN_WIDTH - GUTTER_SIZE}
       height={h}
       sx={{
-        transitionProperty: 'top, left',
-        transitionDuration: '0.1s',
-        '& .resizer': {
-          opacity: 0,
-        },
-        '&:hover .resizer': {
-          opacity: 1,
-        },
+        transition: "top 0.2s, left 0.2s",
+        cursor: "move",
+        "&:hover": { borderColor: "primary.main" },
       }}
     >
       <Box
-        flex={1}
         display="flex"
         alignItems="center"
         justifyContent="center"
+        height="100%"
         fontSize={40}
         color="#fff"
-        sx={{ cursor: 'move' }}
-        draggable
       >
-        <Box sx={{ userSelect: 'none', pointerEvents: 'none' }}>{id}</Box>
+        {id}
       </Box>
     </Box>
   );
