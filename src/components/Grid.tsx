@@ -1,5 +1,5 @@
 import React from "react";
-import { Box } from "@mui/system";
+import { Box } from "@mui/material";
 import { COLUMN_WIDTH, GUTTER_SIZE, NUM_COLUMNS } from "../constants";
 
 type GridProps = { height: number };
