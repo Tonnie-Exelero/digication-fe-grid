@@ -1,19 +1,19 @@
-import React from "react";
-import { render, screen, fireEvent } from "../../__tests__/test-utils";
-import Page from "../Page";
+import React from 'react';
+import { fireEvent, render, screen } from '../../__tests__/test-utils';
+import Page from '../Page';
 
-describe("Page Component", () => {
-  test("initializes with default modules", () => {
+describe('Page Component', () => {
+  test('initializes with default modules', () => {
     render(<Page />);
     const modules = screen.getAllByTestId(/module-/);
     expect(modules).toHaveLength(3);
   });
 
-  test("prevents modules from overlapping", () => {
+  test('prevents modules from overlapping', () => {
     render(<Page />);
 
-    const module1 = screen.getByTestId("module-1");
-    const module2 = screen.getByTestId("module-2");
+    const module1 = screen.getByTestId('module-1');
+    const module2 = screen.getByTestId('module-2');
 
     // Get initial positions
     const initialPos1 = module1.getBoundingClientRect();

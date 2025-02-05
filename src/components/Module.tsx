@@ -1,11 +1,10 @@
-import React from "react";
-import { Box } from "@mui/material";
-import { useDrag, useDragDropManager } from "react-dnd";
-import { useRafLoop } from "react-use";
-
-import type { ModuleInterface } from "../types/ModuleInterface";
-import { COLUMN_WIDTH, GUTTER_SIZE, NUM_COLUMNS } from "../constants";
-import { checkCollision } from "../helpers";
+import { Box } from '@mui/material';
+import React from 'react';
+import { useDrag, useDragDropManager } from 'react-dnd';
+import { useRafLoop } from 'react-use';
+import { COLUMN_WIDTH, GUTTER_SIZE, NUM_COLUMNS } from '../constants';
+import { checkCollision } from '../helpers';
+import type { ModuleInterface } from '../types/ModuleInterface';
 
 type ModuleProps = {
   data: ModuleInterface;
@@ -65,7 +64,7 @@ const Module = (props: ModuleProps) => {
 
   const [, drag] = useDrag(
     () => ({
-      type: "module",
+      type: 'module',
       item: () => {
         initialPosition.current = {
           left: visualPosition.left,
@@ -83,27 +82,27 @@ const Module = (props: ModuleProps) => {
     <Box
       ref={drag}
       data-testid={`module-${id}`}
-      position="absolute"
+      position='absolute'
       border={1}
-      borderColor="grey.500"
-      bgcolor="rgba(0, 0, 0, 0.5)"
+      borderColor='grey.500'
+      bgcolor='rgba(0, 0, 0, 0.5)'
       top={visualPosition.top}
       left={visualPosition.left}
       width={w * COLUMN_WIDTH - GUTTER_SIZE}
       height={h}
       sx={{
-        transition: "top 0.2s, left 0.2s",
-        cursor: "move",
-        "&:hover": { borderColor: "primary.main" },
+        transition: 'top 0.2s, left 0.2s',
+        cursor: 'move',
+        '&:hover': { borderColor: 'primary.main' },
       }}
     >
       <Box
-        display="flex"
-        alignItems="center"
-        justifyContent="center"
-        height="100%"
+        display='flex'
+        alignItems='center'
+        justifyContent='center'
+        height='100%'
         fontSize={40}
-        color="#fff"
+        color='#fff'
       >
         {id}
       </Box>

@@ -1,11 +1,10 @@
-import React from "react";
-import { Box } from "@mui/material";
-import { useDrop } from "react-dnd";
-
-import Grid from "./Grid";
-import Module from "./Module";
-import { GUTTER_SIZE } from "../constants";
-import type { ModuleInterface } from "../types/ModuleInterface";
+import { Box } from '@mui/material';
+import React from 'react';
+import { useDrop } from 'react-dnd';
+import { GUTTER_SIZE } from '../constants';
+import type { ModuleInterface } from '../types/ModuleInterface';
+import Grid from './Grid';
+import Module from './Module';
 
 const initialModules: ModuleInterface[] = [
   { id: 1, coord: { x: 1, y: 80, w: 2, h: 200 } },
@@ -14,20 +13,17 @@ const initialModules: ModuleInterface[] = [
 ];
 
 const Page = () => {
-  const [modules, setModules] =
-    React.useState<ModuleInterface[]>(initialModules);
+  const [modules, setModules] = React.useState<ModuleInterface[]>(initialModules);
   const containerRef = React.useRef<HTMLDivElement>(null);
 
-  const [, drop] = useDrop({ accept: "module" });
+  const [, drop] = useDrop({ accept: 'module' });
   drop(containerRef);
 
   const handleModuleDrag = (id: number, newX: number, newY: number) => {
-    setModules((prevModules) =>
-      prevModules.map((module) =>
-        module.id === id
-          ? { ...module, coord: { ...module.coord, x: newX, y: newY } }
-          : module
-      )
+    setModules(prevModules =>
+      prevModules.map(module =>
+        module.id === id ? { ...module, coord: { ...module.coord, x: newX, y: newY } } : module,
+      ),
     );
   };
 
@@ -37,20 +33,20 @@ const Page = () => {
   return (
     <Box
       ref={containerRef}
-      position="relative"
+      position='relative'
       width={1024}
       height={containerHeight}
-      margin="auto"
-      sx={{ outline: "1px dashed #ccc", bgcolor: "white" }}
+      margin='auto'
+      sx={{ outline: '1px dashed #ccc', bgcolor: 'white' }}
     >
       <Grid height={containerHeight} />
 
-      {modules.map((module) => (
+      {modules.map(module => (
         <Module
           key={module.id}
           data-testid={`module-${module.id}`}
           data={module}
-          otherModules={modules.filter((m) => m.id !== module.id)}
+          otherModules={modules.filter(m => m.id !== module.id)}
           onDrag={handleModuleDrag}
         />
       ))}

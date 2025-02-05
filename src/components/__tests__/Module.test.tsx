@@ -1,11 +1,11 @@
-import React from "react";
-import { render, screen, waitFor } from "../../__tests__/test-utils";
-import Module from "../Module";
-import type { ModuleInterface } from "../../types/ModuleInterface";
-import { COLUMN_WIDTH, GUTTER_SIZE } from "../../constants";
-import userEvent from "@testing-library/user-event";
+import userEvent from '@testing-library/user-event';
+import React from 'react';
+import { COLUMN_WIDTH, GUTTER_SIZE } from '../../constants';
+import type { ModuleInterface } from '../../types/ModuleInterface';
+import { render, screen, waitFor } from '../../__tests__/test-utils';
+import Module from '../Module';
 
-describe("Module Component", () => {
+describe('Module Component', () => {
   const mockOnDrag = jest.fn();
 
   const mockModule: ModuleInterface = {
@@ -21,27 +21,27 @@ describe("Module Component", () => {
     render(<Module data={mockModule} otherModules={[]} onDrag={jest.fn()} />);
   });
 
-  test("renders with correct position and dimensions", () => {
-    const moduleElement = screen.getByTestId("module-1");
+  test('renders with correct position and dimensions', () => {
+    const moduleElement = screen.getByTestId('module-1');
 
     expect(moduleElement).toHaveStyle({
       left: `${2 * 84.5 + 10}px`,
       top: `${100 + 10}px`,
       width: `${2 * 84.5 - 10}px`,
-      height: "200px",
+      height: '200px',
     });
   });
 
-  test("handles invalid drop targets", async () => {
+  test('handles invalid drop targets', async () => {
     const user = userEvent.setup();
 
-    const moduleElement = screen.getByTestId("module-1");
+    const moduleElement = screen.getByTestId('module-1');
 
     await user.pointer([
-      { keys: "[MouseLeft>]", target: moduleElement },
+      { keys: '[MouseLeft>]', target: moduleElement },
       { coords: { x: initialX, y: initialY } },
       { coords: { x: -150, y: -150 } }, // Drag outside valid area
-      "[/MouseLeft]",
+      '[/MouseLeft]',
     ]);
 
     await waitFor(() => {

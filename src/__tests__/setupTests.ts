@@ -1,6 +1,6 @@
-import "@testing-library/jest-dom";
-import "jest-canvas-mock";
-import { cleanup } from "@testing-library/react";
+import '@testing-library/jest-dom';
+import { cleanup } from '@testing-library/react';
+import 'jest-canvas-mock';
 
 afterEach(() => {
   cleanup();

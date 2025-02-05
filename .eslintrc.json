@@ -8,15 +8,18 @@
     "@typescript-eslint",
     "react",
     "react-hooks",
-    "jsx-a11y"
+    "jsx-a11y",
+    "prettier",
+    "plugin:prettier/recommended"
   ],
-  "extends": ["airbnb-typescript", "plugin:react-hooks/recommended"],
+  "extends": ["airbnb-typescript", "plugin:react-hooks/recommended", "prettier"],
   "parserOptions": {
     "project": "./tsconfig.json"
   },
   "rules": {
     "comma-dangle": "off",
     "react/prop-types": 0,
+    "prettier/prettier": "error",
     "react/jsx-props-no-spreading": 0,
     "react/require-default-props": 0,
     "react/jsx-one-expression-per-line": 0,

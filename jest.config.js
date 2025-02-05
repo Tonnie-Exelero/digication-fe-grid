@@ -1,21 +1,21 @@
 module.exports = {
-  preset: "ts-jest",
-  testEnvironment: "jsdom",
-  setupFilesAfterEnv: ["<rootDir>/src/__tests__/setupTests.ts"],
+  preset: 'ts-jest',
+  testEnvironment: 'jsdom',
+  setupFilesAfterEnv: ['<rootDir>/src/__tests__/setupTests.ts'],
   moduleNameMapper: {
-    "\\.(css|less|scss)$": "identity-obj-proxy",
-    "^@/(.*)$": "<rootDir>/src/$1",
+    '\\.(css|less|scss)$': 'identity-obj-proxy',
+    '^@/(.*)$': '<rootDir>/src/$1',
   },
-  testMatch: ["**/__tests__/**/*.test.(ts|tsx)"],
-  coverageDirectory: "coverage",
-  coverageReporters: ["lcov", "cobertura"],
-  forceCoverageMatch: ["<rootDir>/src"],
+  testMatch: ['**/__tests__/**/*.test.(ts|tsx)'],
+  coverageDirectory: 'coverage',
+  coverageReporters: ['lcov', 'cobertura'],
+  forceCoverageMatch: ['<rootDir>/src'],
   collectCoverageFrom: [
-    "src/**/*.{ts,tsx}",
-    "!src/**/*.d.ts",
-    "!src/components/Portfolio.tsx",
-    "!src/App.tsx",
-    "!src/index.tsx",
+    'src/**/*.{ts,tsx}',
+    '!src/**/*.d.ts',
+    '!src/components/Portfolio.tsx',
+    '!src/App.tsx',
+    '!src/index.tsx',
   ],
   coverageThreshold: {
     global: {
@@ -25,15 +25,15 @@ module.exports = {
     },
   },
   transform: {
-    "^.+\\.(ts|tsx)$": [
-      "ts-jest",
+    '^.+\\.(ts|tsx)$': [
+      'ts-jest',
       {
-        tsconfig: "tsconfig.test.json",
+        tsconfig: 'tsconfig.test.json',
       },
     ],
-    "^.+\\.(js|jsx)$": "babel-jest",
+    '^.+\\.(js|jsx)$': 'babel-jest',
   },
-  transformIgnorePatterns: ["/node_modules/"],
-  extensionsToTreatAsEsm: [".ts", ".tsx"],
+  transformIgnorePatterns: ['/node_modules/'],
+  extensionsToTreatAsEsm: ['.ts', '.tsx'],
   testTimeout: 20000,
 };
