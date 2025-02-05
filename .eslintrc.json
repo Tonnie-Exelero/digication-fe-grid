@@ -10,20 +10,25 @@
     "react-hooks",
     "jsx-a11y"
   ],
-  "extends": [
-    "airbnb-typescript",
-    "plugin:react-hooks/recommended"
-  ],
+  "extends": ["airbnb-typescript", "plugin:react-hooks/recommended"],
   "parserOptions": {
     "project": "./tsconfig.json"
   },
   "rules": {
+    "comma-dangle": "off",
     "react/prop-types": 0,
     "react/jsx-props-no-spreading": 0,
     "react/require-default-props": 0,
     "react/jsx-one-expression-per-line": 0,
     "import/no-extraneous-dependencies": 0,
     "react-hooks/rules-of-hooks": "error",
-    "react-hooks/exhaustive-deps": "warn"
+    "react-hooks/exhaustive-deps": "warn",
+    "@typescript-eslint/quotes": ["error", "double"],
+    "@typescript-eslint/naming-convention": 0,
+    "@typescript-eslint/no-use-before-define": 0,
+    "@typescript-eslint/comma-dangle": ["error"],
+    "@typescript-eslint/consistent-type-exports": 1,
+    "@typescript-eslint/consistent-type-imports": 1,
+    "@typescript-eslint/no-unused-vars": [1, { "args": "none" }]
   }
 }

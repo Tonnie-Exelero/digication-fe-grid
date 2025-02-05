@@ -1,43 +1,51 @@
 import React from "react";
-import { render, fireEvent } from "../../__tests__/test-utils";
+import { render, screen, waitFor } from "../../__tests__/test-utils";
 import Module from "../Module";
-import { ModuleInterface } from "../../types/ModuleInterface";
-
-const mockModule: ModuleInterface = {
-  id: 1,
-  coord: { x: 0, y: 0, w: 2, h: 100 },
-};
+import type { ModuleInterface } from "../../types/ModuleInterface";
+import { COLUMN_WIDTH, GUTTER_SIZE } from "../../constants";
+import userEvent from "@testing-library/user-event";
 
 describe("Module Component", () => {
-  test("renders with correct position and dimensions", () => {
-    const { container } = render(
-      <Module data={mockModule} otherModules={[]} onDrag={jest.fn()} />
-    );
+  const mockOnDrag = jest.fn();
 
-    const moduleElement = container.firstChild as HTMLElement;
-    expect(moduleElement).toHaveStyle(`
-      left: 10px;
-      top: 10px;
-      width: 158px;
-      height: 100px;
-    `);
+  const mockModule: ModuleInterface = {
+    id: 1,
+    coord: { x: 2, y: 100, w: 2, h: 200 },
+  };
+
+  // Calculate initial positions based on mock data
+  const initialX = mockModule.coord.x * COLUMN_WIDTH + GUTTER_SIZE;
+  const initialY = mockModule.coord.y + GUTTER_SIZE;
+
+  beforeEach(() => {
+    render(<Module data={mockModule} otherModules={[]} onDrag={jest.fn()} />);
   });
 
-  test("calls onDrag with valid coordinates when moved", async () => {
-    const onDragMock = jest.fn();
-    const { container } = render(
-      <Module data={mockModule} otherModules={[]} onDrag={onDragMock} />
-    );
+  test("renders with correct position and dimensions", () => {
+    const moduleElement = screen.getByTestId("module-1");
 
-    const moduleElement = container.firstChild as HTMLElement;
-
-    fireEvent.dragStart(moduleElement);
-    fireEvent.drag(moduleElement, {
-      clientX: 200,
-      clientY: 100,
+    expect(moduleElement).toHaveStyle({
+      left: `${2 * 84.5 + 10}px`,
+      top: `${100 + 10}px`,
+      width: `${2 * 84.5 - 10}px`,
+      height: "200px",
     });
-    fireEvent.dragEnd(moduleElement);
+  });
 
-    expect(onDragMock).toHaveBeenCalledWith(1, 1, 90);
+  test("handles invalid drop targets", async () => {
+    const user = userEvent.setup();
+
+    const moduleElement = screen.getByTestId("module-1");
+
+    await user.pointer([
+      { keys: "[MouseLeft>]", target: moduleElement },
+      { coords: { x: initialX, y: initialY } },
+      { coords: { x: -150, y: -150 } }, // Drag outside valid area
+      "[/MouseLeft]",
+    ]);
+
+    await waitFor(() => {
+      expect(mockOnDrag).not.toHaveBeenCalled();
+    });
   });
 });

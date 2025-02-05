@@ -1,5 +1,5 @@
-import CssBaseline from '@mui/material/CssBaseline';
-import Portfolio from './components/Portfolio';
+import CssBaseline from "@mui/material/CssBaseline";
+import Portfolio from "./components/Portfolio";
 
 const App = () => {
   return (

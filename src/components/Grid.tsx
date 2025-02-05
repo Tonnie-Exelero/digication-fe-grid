@@ -9,6 +9,7 @@ const Grid = ({ height }: GridProps) => {
 
   return (
     <Box
+      className="grid"
       position="absolute"
       width="100%"
       height="100%"

@@ -1,5 +1,5 @@
 import { COLUMN_WIDTH, GUTTER_SIZE } from "./constants";
-import ModuleInterface from "./types/ModuleInterface";
+import type { ModuleInterface } from "./types/ModuleInterface";
 
 export const moduleW2LocalWidth = (moduleW: number) =>
   moduleW * COLUMN_WIDTH - GUTTER_SIZE;
@@ -15,7 +15,7 @@ export const moduleY2LocalY = (moduleY: number) => moduleY + GUTTER_SIZE;
  */
 export const checkCollision = (
   currentModule: ModuleInterface,
-  otherModules: ModuleInterface[]
+  otherModules: ModuleInterface[],
 ): boolean => {
   const currentLeft = currentModule.coord.x * COLUMN_WIDTH + GUTTER_SIZE;
   const currentRight =

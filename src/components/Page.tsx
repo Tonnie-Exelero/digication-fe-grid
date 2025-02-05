@@ -5,7 +5,7 @@ import { useDrop } from "react-dnd";
 import Grid from "./Grid";
 import Module from "./Module";
 import { GUTTER_SIZE } from "../constants";
-import ModuleInterface from "../types/ModuleInterface";
+import type { ModuleInterface } from "../types/ModuleInterface";
 
 const initialModules: ModuleInterface[] = [
   { id: 1, coord: { x: 1, y: 80, w: 2, h: 200 } },
@@ -44,9 +44,11 @@ const Page = () => {
       sx={{ outline: "1px dashed #ccc", bgcolor: "white" }}
     >
       <Grid height={containerHeight} />
+
       {modules.map((module) => (
         <Module
           key={module.id}
+          data-testid={`module-${module.id}`}
           data={module}
           otherModules={modules.filter((m) => m.id !== module.id)}
           onDrag={handleModuleDrag}

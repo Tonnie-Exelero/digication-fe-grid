@@ -3,7 +3,7 @@ import { Box } from "@mui/material";
 import { useDrag, useDragDropManager } from "react-dnd";
 import { useRafLoop } from "react-use";
 
-import { ModuleInterface } from "../types/ModuleInterface";
+import type { ModuleInterface } from "../types/ModuleInterface";
 import { COLUMN_WIDTH, GUTTER_SIZE, NUM_COLUMNS } from "../constants";
 import { checkCollision } from "../helpers";
 
@@ -76,7 +76,7 @@ const Module = (props: ModuleProps) => {
       },
       end: stop,
     }),
-    [visualPosition.left, visualPosition.top]
+    [visualPosition.left, visualPosition.top],
   );
 
   return (

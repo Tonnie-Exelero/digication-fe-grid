@@ -1,8 +1,8 @@
-import { Box } from '@mui/material';
-import { HTML5Backend } from 'react-dnd-html5-backend';
-import { DndProvider } from 'react-dnd';
+import { Box } from "@mui/material";
+import { HTML5Backend } from "react-dnd-html5-backend";
+import { DndProvider } from "react-dnd";
 
-import Page from './Page';
+import Page from "./Page";
 
 const Portfolio = () => {
   return (
