@@ -1,10 +1,8 @@
-import webpack from 'webpack';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
+import type webpack from 'webpack';
 
 const config: webpack.Configuration = {
-  entry: [
-    './src/index.tsx',
-  ],
+  entry: ['./src/index.tsx'],
   resolve: {
     extensions: ['.ts', '.tsx', '.js'],
   },
