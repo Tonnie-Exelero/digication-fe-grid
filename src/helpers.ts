@@ -7,6 +7,7 @@ export const moduleY2LocalY = (moduleY: number) => moduleY + GUTTER_SIZE;
 
 /**
  * Checks for collisions between modules considering gutter spacing
+ * 
  * @param currentModule The module being moved
  * @param otherModules Array of other modules to check against
  * @returns true if collision detected
