@@ -2964,7 +2964,594 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 7–12: Placeholder for iterative dev  -->
+    <!-- SECTION 7: Data Architecture                  -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s7">
+      <h2><span class="section-num">07</span> Data Architecture</h2>
+
+      <p>
+        The Student Hub's data layer is built on three pillars: <strong>Neon Postgres</strong> as the
+        primary relational store, <strong>Upstash Redis</strong> for caching and rate limiting, and
+        <strong>Meilisearch</strong> for full-text search. <strong>Drizzle ORM</strong> provides the
+        type-safe bridge between TypeScript and SQL — every query is fully typed from schema
+        definition to resolver return value, with zero runtime overhead beyond raw SQL.
+      </p>
+
+      <!-- 7.1 Database Selection -->
+      <h3><span class="subsection-num">7.1</span> Why Neon Postgres</h3>
+
+      <p>
+        The Student Hub needs a relational database for structured domain data (courses, enrollments,
+        payments, reviews) with transactional guarantees. Neon is chosen over traditional managed
+        Postgres (RDS, Cloud SQL) and over Supabase's Postgres for specific architectural reasons:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criterion</th>
+            <th>Neon</th>
+            <th>Supabase Postgres</th>
+            <th>AWS RDS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Serverless compatibility</strong></td>
+            <td>Native — HTTP-based driver (<code>@neondatabase/serverless</code>), no persistent connections needed</td>
+            <td>Requires connection pooling (Supavisor) for serverless</td>
+            <td>Requires RDS Proxy for serverless; cold starts degrade performance</td>
+          </tr>
+          <tr>
+            <td><strong>Branching</strong></td>
+            <td>Database branches (copy-on-write) for preview deployments — each PR gets its own DB</td>
+            <td>Not available</td>
+            <td>Not available (snapshot/restore is manual)</td>
+          </tr>
+          <tr>
+            <td><strong>Scale-to-zero</strong></td>
+            <td>Suspends compute after 5 min idle; sub-second cold start</td>
+            <td>Always-on (minimum $25/month)</td>
+            <td>Always-on (no scale-to-zero option)</td>
+          </tr>
+          <tr>
+            <td><strong>Cost model</strong></td>
+            <td>Pay per compute-second + storage; free tier covers development</td>
+            <td>Flat monthly tiers</td>
+            <td>Hourly instance pricing (expensive for low-traffic)</td>
+          </tr>
+          <tr>
+            <td><strong>Vercel integration</strong></td>
+            <td>First-party Vercel integration; auto-provisions branch DBs per preview</td>
+            <td>Manual env var configuration</td>
+            <td>Manual VPC peering or public access</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Separation from Provider Hub</div>
+        <p style="margin-bottom:0;">
+          The Student Hub has its own Neon database, completely separate from the Provider Hub's
+          Supabase Postgres. Course data is synchronized via a one-way sync mechanism (Section 6.1),
+          not shared database access. This ensures the Student Hub can never corrupt provider data,
+          and each system scales independently.
+        </p>
+      </div>
+
+      <!-- 7.2 Schema Design -->
+      <h3><span class="subsection-num">7.2</span> Schema Design</h3>
+
+      <p>
+        The schema follows <strong>domain-driven design</strong> boundaries. Each bounded context
+        (catalog, enrollment, payment, review, notification) owns its tables. Cross-context
+        references use foreign keys but are accessed through service boundaries, not direct joins.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Database Schema — Entity Relationship Diagram
+  ───────────────────────────────────────────────
+
+  ┌─────────────────────────┐       ┌─────────────────────────────┐
+  │  courses                │       │  providers (synced)          │
+  ├─────────────────────────┤       ├─────────────────────────────┤
+  │  id            UUID  PK │       │  id              UUID  PK   │
+  │  provider_id   UUID  FK │──────▶│  name            TEXT       │
+  │  title         TEXT     │       │  slug            TEXT  UQ   │
+  │  slug          TEXT  UQ │       │  avatar_url      TEXT       │
+  │  description   TEXT     │       │  synced_at       TIMESTAMPTZ│
+  │  price_cents   INT      │       └─────────────────────────────┘
+  │  currency      TEXT     │
+  │  category      TEXT     │       ┌─────────────────────────────┐
+  │  thumbnail_url TEXT     │       │  lessons                    │
+  │  status        ENUM     │       ├─────────────────────────────┤
+  │  enrollment_count INT   │       │  id              UUID  PK   │
+  │  avg_rating    DECIMAL  │       │  course_id       UUID  FK   │
+  │  published_at  TSTZ     │       │  title           TEXT       │
+  │  synced_at     TSTZ     │       │  sort_order      INT        │
+  │  created_at    TSTZ     │       │  content_type    ENUM       │
+  │  updated_at    TSTZ     │       │  duration_secs   INT        │
+  └────────────┬────────────┘       │  is_preview      BOOLEAN    │
+               │                    │  synced_at       TIMESTAMPTZ│
+               │ 1:N                └─────────────────────────────┘
+               │
+  ┌────────────┴────────────┐       ┌─────────────────────────────┐
+  │  enrollments            │       │  enrollment_progress        │
+  ├─────────────────────────┤       ├─────────────────────────────┤
+  │  id            UUID  PK │       │  id              UUID  PK   │
+  │  student_id    TEXT  FK │  1:N  │  enrollment_id   UUID  FK   │
+  │  course_id     UUID  FK │──────▶│  lesson_id       UUID  FK   │
+  │  status        ENUM     │       │  completed       BOOLEAN    │
+  │  progress_pct  DECIMAL  │       │  position_secs   INT        │
+  │  enrolled_at   TSTZ     │       │  completed_at    TIMESTAMPTZ│
+  │  completed_at  TSTZ     │       │  updated_at      TIMESTAMPTZ│
+  │  created_at    TSTZ     │       └─────────────────────────────┘
+  │  updated_at    TSTZ     │
+  └────────────┬────────────┘
+               │
+               │ 1:1 (on completion)
+               ▼
+  ┌─────────────────────────┐       ┌─────────────────────────────┐
+  │  certificates           │       │  reviews                    │
+  ├─────────────────────────┤       ├─────────────────────────────┤
+  │  id            UUID  PK │       │  id              UUID  PK   │
+  │  enrollment_id UUID  FK │       │  course_id       UUID  FK   │
+  │  student_id    TEXT     │       │  student_id      TEXT       │
+  │  course_title  TEXT     │       │  rating          SMALLINT   │
+  │  issued_at     TSTZ     │       │  title           TEXT       │
+  │  pdf_url       TEXT     │       │  body            TEXT       │
+  └─────────────────────────┘       │  created_at      TIMESTAMPTZ│
+                                    │  updated_at      TIMESTAMPTZ│
+  ┌─────────────────────────┐       │  UQ(course_id, student_id)  │
+  │  transactions           │       └─────────────────────────────┘
+  ├─────────────────────────┤
+  │  id            UUID  PK │       ┌─────────────────────────────┐
+  │  student_id    TEXT     │       │  notifications              │
+  │  course_id     UUID  FK │       ├─────────────────────────────┤
+  │  stripe_session TEXT    │       │  id              UUID  PK   │
+  │  stripe_payment TEXT    │       │  student_id      TEXT       │
+  │  amount_cents  INT      │       │  type            ENUM       │
+  │  currency      TEXT     │       │  title           TEXT       │
+  │  status        ENUM     │       │  body            TEXT       │
+  │  promo_code    TEXT     │       │  link            TEXT       │
+  │  created_at    TSTZ     │       │  read            BOOLEAN    │
+  └─────────────────────────┘       │  created_at      TIMESTAMPTZ│
+                                    └─────────────────────────────┘
+
+  Key constraints:
+  • courses.slug — unique index (URL-based lookups)
+  • enrollments(student_id, course_id) — unique (one enrollment per course per student)
+  • reviews(course_id, student_id) — unique (one review per course per student)
+  • notifications(student_id, created_at DESC) — index for feed pagination
+  • enrollment_progress(enrollment_id, lesson_id) — unique composite
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.1 — Database schema: domain-aligned tables with clear ownership boundaries and referential integrity</p>
+
+      <!-- 7.3 Drizzle ORM -->
+      <h3><span class="subsection-num">7.3</span> Drizzle ORM — Type-Safe Data Access</h3>
+
+      <p>
+        <strong>Drizzle ORM</strong> is the data access layer for all database operations. It
+        generates SQL at build time (not runtime reflection), producing queries identical to
+        hand-written SQL with full TypeScript inference.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criterion</th>
+            <th>Drizzle</th>
+            <th>Prisma</th>
+            <th>Raw SQL</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Bundle size</strong></td>
+            <td>~7 KB (no engine binary)</td>
+            <td>~2 MB (Query Engine WASM)</td>
+            <td>0 KB</td>
+          </tr>
+          <tr>
+            <td><strong>Cold start impact</strong></td>
+            <td>Negligible — pure JS</td>
+            <td>~300ms WASM initialization in serverless</td>
+            <td>None</td>
+          </tr>
+          <tr>
+            <td><strong>Query output</strong></td>
+            <td>Transparent — SQL is visible and predictable</td>
+            <td>Abstracted — generated SQL can surprise</td>
+            <td>Exact control</td>
+          </tr>
+          <tr>
+            <td><strong>Type safety</strong></td>
+            <td>Full — inferred from schema definition</td>
+            <td>Full — generated client types</td>
+            <td>None (requires manual typing)</td>
+          </tr>
+          <tr>
+            <td><strong>Serverless fit</strong></td>
+            <td>Excellent — designed for edge/serverless runtimes</td>
+            <td>Improving (Data Proxy), but still heavier</td>
+            <td>Excellent</td>
+          </tr>
+          <tr>
+            <td><strong>Relational queries</strong></td>
+            <td>Relational Query API for nested selects; SQL-like for complex queries</td>
+            <td>Excellent nested includes</td>
+            <td>Full control</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Drizzle Schema → TypeScript Types → GraphQL Types
+  ───────────────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Schema Definition (server/db/schema/courses.ts)                    │
+  │                                                                      │
+  │  export const courses = pgTable('courses', {                        │
+  │    id:              uuid('id').primaryKey().defaultRandom(),         │
+  │    providerId:      uuid('provider_id').references(providers.id),   │
+  │    title:           text('title').notNull(),                         │
+  │    slug:            text('slug').notNull().unique(),                 │
+  │    description:     text('description'),                             │
+  │    priceCents:      integer('price_cents').notNull(),                │
+  │    category:        text('category').notNull(),                      │
+  │    status:          courseStatusEnum('status').default('draft'),     │
+  │    enrollmentCount: integer('enrollment_count').default(0),          │
+  │    avgRating:       decimal('avg_rating', { precision: 3, scale: 2 }),│
+  │    publishedAt:     timestamp('published_at', { withTimezone: true }),│
+  │    createdAt:       timestamp('created_at').defaultNow(),            │
+  │    updatedAt:       timestamp('updated_at').defaultNow(),            │
+  │  });                                                                 │
+  └─────────────────────────┬────────────────────────────────────────────┘
+                            │ TypeScript infers
+                            ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Inferred Type (automatic — no manual type writing)                 │
+  │                                                                      │
+  │  type Course = {                                                     │
+  │    id: string;                                                       │
+  │    providerId: string;                                               │
+  │    title: string;                                                    │
+  │    slug: string;                                                     │
+  │    description: string | null;                                       │
+  │    priceCents: number;                                               │
+  │    category: string;                                                 │
+  │    status: 'draft' | 'published' | 'archived';                      │
+  │    enrollmentCount: number;                                          │
+  │    avgRating: string | null;  // decimal → string in Drizzle        │
+  │    publishedAt: Date | null;                                         │
+  │    createdAt: Date;                                                  │
+  │    updatedAt: Date;                                                  │
+  │  }                                                                   │
+  └─────────────────────────┬────────────────────────────────────────────┘
+                            │ used by Pothos objectRef&lt;Course&gt;
+                            ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  GraphQL Type (Pothos maps Drizzle types to GraphQL schema)         │
+  │                                                                      │
+  │  type Course {                                                       │
+  │    id: ID!                                                           │
+  │    title: String!                                                    │
+  │    slug: String!                                                     │
+  │    price: Float!          # resolved: priceCents / 100              │
+  │    provider: Provider!    # resolved: DataLoader batch              │
+  │    reviews: ReviewConnection!                                        │
+  │  }                                                                   │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  One schema definition → three fully typed layers (DB, TS, GraphQL).
+  Rename a column in Drizzle → TypeScript catches every broken reference.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.2 — Type flow from Drizzle schema to GraphQL: one definition, three typed layers</p>
+
+      <!-- 7.4 Migration Strategy -->
+      <h3><span class="subsection-num">7.4</span> Migration Strategy</h3>
+
+      <p>
+        Database migrations are managed by <strong>Drizzle Kit</strong>, which generates SQL migration
+        files by diffing the TypeScript schema against the current database state. Migrations are
+        version-controlled and run automatically during CI/CD.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Aspect</th>
+            <th>Approach</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Generation</strong></td>
+            <td><code>drizzle-kit generate</code> — diffs schema TS files against migration history</td>
+            <td>Deterministic SQL files committed to git; no "magic" migrations</td>
+          </tr>
+          <tr>
+            <td><strong>Execution</strong></td>
+            <td><code>drizzle-kit migrate</code> in CI before deployment</td>
+            <td>Runs in order; tracks applied migrations in <code>__drizzle_migrations</code> table</td>
+          </tr>
+          <tr>
+            <td><strong>Preview branches</strong></td>
+            <td>Neon branch per Vercel preview — migrations run on the branch DB</td>
+            <td>PRs test schema changes against an isolated database copy</td>
+          </tr>
+          <tr>
+            <td><strong>Rollback strategy</strong></td>
+            <td>Forward-only migrations with backward-compatible changes</td>
+            <td>Drop column = two-step (stop reading → drop). Avoids risky rollback scripts</td>
+          </tr>
+          <tr>
+            <td><strong>Seeding</strong></td>
+            <td><code>drizzle-kit seed</code> for development/preview environments</td>
+            <td>Realistic test data (sample courses, enrollments) for development and QA</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Migration Workflow
+  ───────────────────
+
+  Developer                     CI/CD Pipeline                   Neon Postgres
+  ───────                       ──────────────                   ─────────────
+      │                              │                                │
+      │  1. Edit schema TS file      │                                │
+      │  2. drizzle-kit generate     │                                │
+      │     → migration SQL created  │                                │
+      │  3. git commit + push        │                                │
+      │─────────────────────────────▶│                                │
+      │                              │  4. Neon creates branch DB     │
+      │                              │─────────────────────────────▶ │ (copy-on-write)
+      │                              │                                │
+      │                              │  5. drizzle-kit migrate        │
+      │                              │─────────────────────────────▶ │ (apply to branch)
+      │                              │                                │
+      │                              │  6. Run tests against branch   │
+      │                              │─────────────────────────────▶ │
+      │                              │                                │
+      │  PR merged to main           │                                │
+      │─────────────────────────────▶│                                │
+      │                              │  7. drizzle-kit migrate        │
+      │                              │─────────────────────────────▶ │ (apply to production)
+      │                              │                                │
+      │                              │  8. Deploy to Vercel           │
+      │                              │─────────────────────────────▶ │
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.3 — Migration workflow: schema changes tested on Neon branch DBs before promotion to production</p>
+
+      <!-- 7.5 Caching Strategy -->
+      <h3><span class="subsection-num">7.5</span> Caching Strategy</h3>
+
+      <p>
+        The Student Hub uses a <strong>multi-layer caching strategy</strong> to minimize database
+        load and maximize response speed. Each layer serves a different purpose and has different
+        invalidation characteristics.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Caching Layers
+  ───────────────
+
+  Request Flow:
+  Client → Edge (Vercel) → Application (urql / Redis) → Database (Neon)
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Layer 1: EDGE CACHE (Vercel CDN)                                       │
+  │                                                                          │
+  │  • ISR pages cached at edge (course detail, catalog pages)               │
+  │  • Persisted query GET requests cached via Cache-Control headers         │
+  │  • TTL: 60s (stale-while-revalidate: 300s)                              │
+  │  • Invalidation: on-demand via revalidatePath() / revalidateTag()       │
+  │  • Hit rate: ~80% for catalog browsing traffic                           │
+  └──────────────────────────────────────────────────────────────────────────┘
+                                    │ cache miss
+                                    ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Layer 2: APPLICATION CACHE (Upstash Redis)                              │
+  │                                                                          │
+  │  • Course metadata: 5 min TTL (frequently accessed, rarely changes)      │
+  │  • Search facets: 10 min TTL (aggregation queries are expensive)          │
+  │  • Provider profiles: 30 min TTL (synced daily, near-static)             │
+  │  • Rate limit counters: sliding window (60s expiry)                      │
+  │  • Invalidation: explicit delete on sync / write events                  │
+  │  • Connection: Upstash REST API (no persistent connections needed)       │
+  └──────────────────────────────────────────────────────────────────────────┘
+                                    │ cache miss
+                                    ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │  Layer 3: CLIENT CACHE (urql normalized cache)                           │
+  │                                                                          │
+  │  • Normalized by __typename + id — entities shared across queries         │
+  │  • Mutations auto-invalidate related queries via __typename tracking     │
+  │  • Optimistic updates for progress tracking and review submission        │
+  │  • SSR hydration: server-fetched data pre-fills client cache             │
+  │  • No stale data on navigation — cache is the source of truth until TTL  │
+  └──────────────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.4 — Multi-layer caching: edge → Redis → client, each with distinct TTLs and invalidation strategies</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Data Type</th>
+            <th>Cache Layer</th>
+            <th>TTL</th>
+            <th>Invalidation Trigger</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Course catalog pages</td>
+            <td>Edge (ISR)</td>
+            <td>60s + 300s SWR</td>
+            <td>Provider sync webhook calls <code>revalidateTag('courses')</code></td>
+          </tr>
+          <tr>
+            <td>Course detail page</td>
+            <td>Edge (ISR)</td>
+            <td>60s + 300s SWR</td>
+            <td><code>revalidatePath('/courses/[slug]')</code> on review/enrollment</td>
+          </tr>
+          <tr>
+            <td>Course metadata (API)</td>
+            <td>Redis</td>
+            <td>5 min</td>
+            <td>Explicit delete on provider sync</td>
+          </tr>
+          <tr>
+            <td>Search facets</td>
+            <td>Redis</td>
+            <td>10 min</td>
+            <td>TTL expiry (acceptable staleness)</td>
+          </tr>
+          <tr>
+            <td>Student enrollments</td>
+            <td>Client (urql)</td>
+            <td>Session</td>
+            <td>Mutation invalidation (enrollment created / progress updated)</td>
+          </tr>
+          <tr>
+            <td>Notification feed</td>
+            <td>Client (urql)</td>
+            <td>Session</td>
+            <td>Polling (30s interval) + mutation invalidation on markRead</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 7.6 Connection Management -->
+      <h3><span class="subsection-num">7.6</span> Connection Management</h3>
+
+      <p>
+        Serverless functions create and destroy database connections per invocation. Without
+        management, this leads to connection exhaustion under load. The Student Hub uses
+        <strong>Neon's serverless driver</strong> which communicates over HTTP/WebSocket, eliminating
+        the traditional connection pooling problem entirely.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Approach</th>
+            <th>How It Works</th>
+            <th>When Used</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Neon HTTP driver</strong></td>
+            <td>Stateless HTTP requests — no persistent connection. Each query is an independent HTTPS call to Neon's proxy</td>
+            <td>All serverless function invocations (GraphQL resolvers, ISR revalidation)</td>
+          </tr>
+          <tr>
+            <td><strong>Neon WebSocket driver</strong></td>
+            <td>Persistent WebSocket for multi-statement transactions. Connection lives for the function's execution</td>
+            <td>Transactions (payment processing, enrollment creation with progress initialization)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Connection Strategy — Serverless-Optimized
+  ────────────────────────────────────────────
+
+  Traditional approach (connection pooling problems):
+  ┌──────────────┐     TCP connection     ┌──────────┐
+  │  Serverless  │─── (3-way handshake) ──▶│ Postgres │
+  │  Function    │     + TLS negotiate     │          │
+  │  (cold start)│     = ~50ms overhead    │          │
+  └──────────────┘                         └──────────┘
+  Problem: 100 concurrent functions = 100 connections (exhausts pool)
+
+  Neon serverless driver (HTTP-based):
+  ┌──────────────┐     HTTPS POST          ┌──────────┐     Internal      ┌──────────┐
+  │  Serverless  │────────────────────────▶│  Neon    │────────────────▶ │ Postgres │
+  │  Function    │  { sql, params }        │  Proxy   │  Connection pool │          │
+  │              │◀────────────────────────│          │◀────────────────│          │
+  └──────────────┘  { rows: [...] }        └──────────┘                  └──────────┘
+  No connection management. No pool exhaustion. ~5ms overhead per query.
+  Neon's proxy handles pooling internally — invisible to the application.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.5 — Neon serverless driver: HTTP-based queries eliminate connection pool management in serverless</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Zero Connection Configuration</div>
+        <p style="margin-bottom:0;">
+          With Neon's serverless driver, there is no <code>max_connections</code> to tune, no
+          PgBouncer to deploy, no connection leak debugging. The application code simply calls
+          <code>db.select()</code> and Drizzle + Neon handle the rest. This is a significant
+          operational simplification compared to traditional Postgres setups, and it's the primary
+          reason Neon is chosen over self-managed Postgres for a serverless deployment.
+        </p>
+      </div>
+
+      <!-- 7.7 Data Sync -->
+      <h3><span class="subsection-num">7.7</span> Provider Data Synchronization</h3>
+
+      <p>
+        Course data originates in the <strong>Provider Hub</strong> (Supabase Postgres) and must be
+        replicated to the Student Hub's Neon Postgres. This is a one-way, event-driven sync — the
+        Student Hub never writes back to the Provider Hub.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Data Sync — Provider Hub → Student Hub
+  ─────────────────────────────────────────
+
+  ┌───────────────────┐                    ┌───────────────────┐
+  │  Provider Hub     │                    │  Student Hub      │
+  │  (Supabase)       │                    │  (Neon Postgres)  │
+  │                   │                    │                   │
+  │  courses          │    Webhook POST    │  courses (synced) │
+  │  lessons          │───────────────────▶│  lessons (synced) │
+  │  providers        │   on insert/update │  providers        │
+  │                   │                    │                   │
+  │  Supabase DB      │                    │  Catalog Service  │
+  │  Webhooks trigger │                    │  validates +      │
+  │  on row changes   │                    │  upserts data     │
+  └───────────────────┘                    └───────────────────┘
+
+  Sync contract:
+  ┌─────────────────────────────────────────────────────────────┐
+  │  1. Provider publishes a course → Supabase webhook fires    │
+  │  2. Webhook hits /api/webhooks/provider-sync (signed)       │
+  │  3. Catalog Service validates payload (Zod schema)          │
+  │  4. UPSERT into courses/lessons/providers tables            │
+  │  5. Invalidate Redis cache + revalidate ISR pages           │
+  │  6. Update Meilisearch index                                │
+  └─────────────────────────────────────────────────────────────┘
+
+  Guarantees:
+  • Idempotent — same webhook can fire multiple times safely (UPSERT)
+  • Ordered — synced_at timestamp prevents stale overwrites
+  • Verified — webhook signature validated via HMAC-SHA256
+  • Resilient — failed syncs retry (Supabase webhook retry policy)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 7.6 — Data sync: one-way replication from Provider Hub via signed webhooks, idempotent upserts</p>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 8–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
