@@ -4847,7 +4847,644 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 10–12: Placeholder for iterative dev -->
+    <!-- SECTION 10: Infrastructure                    -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s10">
+      <h2><span class="section-num">10</span> Infrastructure &amp; Deployment</h2>
+
+      <p>
+        The Student Hub runs entirely on <strong>managed services</strong> — no self-hosted servers,
+        no Kubernetes, no Docker in production. This is a deliberate choice: a small team shipping
+        a marketplace should spend engineering time on product features, not infrastructure operations.
+        Every service in the stack is chosen for its serverless or fully-managed nature.
+      </p>
+
+      <!-- 10.1 Deployment Architecture -->
+      <h3><span class="subsection-num">10.1</span> Deployment Architecture</h3>
+
+      <div class="diagram">
+        <pre>
+  Production Infrastructure
+  ───────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                           Vercel Edge Network                           │
+  │                                                                          │
+  │   ┌─────────────┐  ┌──────────────┐  ┌─────────────┐  ┌─────────────┐  │
+  │   │  CDN /      │  │  Edge        │  │  ISR Cache   │  │  Edge       │  │
+  │   │  Static     │  │  Middleware   │  │  (Catalog    │  │  Config     │  │
+  │   │  Assets     │  │  (auth,      │  │   pages)     │  │  (headers,  │  │
+  │   │  (/_next)   │  │   geo,       │  │              │  │   rewrites) │  │
+  │   │             │  │   rate limit) │  │  TTL: 60s    │  │             │  │
+  │   └─────────────┘  └──────────────┘  └─────────────┘  └─────────────┘  │
+  └──────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                        Vercel Serverless Functions                       │
+  │                                                                          │
+  │   ┌──────────────────────┐  ┌──────────────────────┐                    │
+  │   │  Next.js App Router  │  │  API Routes          │                    │
+  │   │  • SSR pages         │  │  • /api/graphql      │                    │
+  │   │  • Server Components │  │  • /api/webhooks/*   │                    │
+  │   │  • Route Handlers    │  │                      │                    │
+  │   │                      │  │  Runtime: Node.js 20 │                    │
+  │   │  Cold start: ~200ms  │  │  Max duration: 10s   │                    │
+  │   │  (mitigated by ISR)  │  │  Memory: 1024 MB     │                    │
+  │   └──────────────────────┘  └──────────────────────┘                    │
+  └──────────────────────────────────────────────────────────────────────────┘
+                                    │
+                          ┌─────────┼─────────┐
+                          ▼         ▼         ▼
+  ┌──────────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────────┐
+  │  Neon        │  │  Upstash │  │  Meilisearch │  │  External    │
+  │  Postgres    │  │  Redis   │  │  Cloud       │  │  Services    │
+  │              │  │          │  │              │  │              │
+  │  Region:     │  │  Global  │  │  Region:     │  │  • Clerk     │
+  │  us-east-1   │  │  (edge   │  │  us-east-1   │  │  • Stripe    │
+  │              │  │   reads) │  │              │  │              │
+  │  Branching   │  │          │  │  Dedicated   │  │  (Global)    │
+  │  enabled     │  │  REST +  │  │  instance    │  │              │
+  │              │  │  Edge    │  │              │  │              │
+  └──────────────┘  └──────────┘  └──────────────┘  └──────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 10.1 — Production infrastructure: all managed services, no self-hosted components</p>
+
+      <!-- 10.2 Environment Strategy -->
+      <h3><span class="subsection-num">10.2</span> Environment Strategy</h3>
+
+      <p>
+        The Student Hub uses <strong>four environments</strong>, each with isolated data stores.
+        Vercel's Git-based deployment model maps branches to environments automatically.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Environment</th>
+            <th>Branch</th>
+            <th>URL</th>
+            <th>Database</th>
+            <th>Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Production</strong></td>
+            <td><code>main</code></td>
+            <td><code>hub.digication.com</code></td>
+            <td>Neon <code>main</code> branch</td>
+            <td>Live student traffic. Zero-downtime deploys via Vercel's atomic deployments</td>
+          </tr>
+          <tr>
+            <td><strong>Staging</strong></td>
+            <td><code>staging</code></td>
+            <td><code>staging-hub.digication.com</code></td>
+            <td>Neon <code>staging</code> branch</td>
+            <td>Pre-production validation. Mirrors production config. Used for final QA before merge to main</td>
+          </tr>
+          <tr>
+            <td><strong>Preview</strong></td>
+            <td>Any PR branch</td>
+            <td><code>{branch}-hub.vercel.app</code></td>
+            <td>Neon ephemeral branch (auto-created)</td>
+            <td>Per-PR deployments. Each PR gets its own URL and database branch for isolated testing</td>
+          </tr>
+          <tr>
+            <td><strong>Local</strong></td>
+            <td>Developer's branch</td>
+            <td><code>localhost:3000</code></td>
+            <td>Neon dev branch or local Docker Postgres</td>
+            <td>Developer workstation. Hot reload, debug tooling, GraphQL playground</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Neon Database Branching</div>
+        <p style="margin-bottom:0;">
+          Neon's branching feature is critical to this environment strategy. Creating a database
+          branch is a copy-on-write operation that completes in &lt;1 second regardless of database
+          size. Preview environments get instant, isolated databases with production-like data.
+          Branches are automatically deleted when PRs are closed, preventing database proliferation.
+          This eliminates the traditional pain point of shared staging databases where one developer's
+          test data corrupts another's.
+        </p>
+      </div>
+
+      <!-- 10.3 CI/CD Pipeline -->
+      <h3><span class="subsection-num">10.3</span> CI/CD Pipeline</h3>
+
+      <p>
+        The deployment pipeline runs on <strong>GitHub Actions</strong> for CI (testing, linting,
+        type-checking) and <strong>Vercel</strong> for CD (building, deploying). This separation
+        means CI runs in parallel with Vercel's build — a failing test doesn't block the preview
+        deploy, but it does block merging to main.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  CI/CD Pipeline — Push to Merge
+  ─────────────────────────────────
+
+  Developer pushes to feature branch
+      │
+      ├──────────────────────────────────────────────────────────────────┐
+      │  GitHub Actions (CI)                                             │
+      │                                                                  │
+      │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+      │  │  Lint         │  │  Type Check  │  │  Unit Tests  │          │
+      │  │  (Biome)      │  │  (tsc)       │  │  (Vitest)    │  parallel│
+      │  │  ~10s         │  │  ~15s        │  │  ~30s        │          │
+      │  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘          │
+      │         │                  │                  │                  │
+      │         └──────────┬──────┘──────────────────┘                  │
+      │                    ▼                                             │
+      │  ┌──────────────────────────────────────────────┐               │
+      │  │  Integration Tests (Vitest + MSW)             │               │
+      │  │  GraphQL resolvers, service layer             │               │
+      │  │  ~45s                                         │               │
+      │  └──────────────────┬───────────────────────────┘               │
+      │                     ▼                                            │
+      │  ┌──────────────────────────────────────────────┐               │
+      │  │  Schema Validation                            │               │
+      │  │  • Drizzle schema → migration diff check      │               │
+      │  │  • GraphQL schema breaking change detection   │               │
+      │  │  ~5s                                          │               │
+      │  └──────────────────┬───────────────────────────┘               │
+      │                     ▼                                            │
+      │              ✅ CI passes → PR mergeable                        │
+      └──────────────────────────────────────────────────────────────────┘
+      │
+      ├──────────────────────────────────────────────────────────────────┐
+      │  Vercel (CD) — runs in parallel with CI                         │
+      │                                                                  │
+      │  ┌──────────────────────────────────────────────┐               │
+      │  │  1. Install dependencies (cached node_modules)│               │
+      │  │  2. Run Drizzle migrations on preview branch  │               │
+      │  │  3. Build Next.js (output: serverless funcs)  │               │
+      │  │  4. Deploy to preview URL                     │               │
+      │  │  5. Assign preview URL to PR comment          │               │
+      │  │                                               │               │
+      │  │  Total: ~60–90s                               │               │
+      │  └──────────────────────────────────────────────┘               │
+      └──────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+  PR merged to main
+      │
+      ▼
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Vercel Production Deploy                                            │
+  │                                                                      │
+  │  1. Run Drizzle migrations on production Neon branch                 │
+  │  2. Build Next.js                                                    │
+  │  3. Atomic deployment (instant switch, no downtime)                  │
+  │  4. Old deployment kept for instant rollback                         │
+  │                                                                      │
+  │  Rollback: one-click in Vercel dashboard, &lt;5 seconds               │
+  └──────────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 10.2 — CI/CD pipeline: GitHub Actions for quality gates, Vercel for deployment, Neon branching for database isolation</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Tool</th>
+            <th>Duration</th>
+            <th>Blocks Merge?</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Lint</strong></td>
+            <td>Biome</td>
+            <td>~10s</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Type check</strong></td>
+            <td><code>tsc --noEmit</code></td>
+            <td>~15s</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Unit tests</strong></td>
+            <td>Vitest</td>
+            <td>~30s</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Integration tests</strong></td>
+            <td>Vitest + MSW</td>
+            <td>~45s</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Schema validation</strong></td>
+            <td>Drizzle Kit + custom script</td>
+            <td>~5s</td>
+            <td>Yes</td>
+          </tr>
+          <tr>
+            <td><strong>Preview deploy</strong></td>
+            <td>Vercel</td>
+            <td>~60–90s</td>
+            <td>No (informational)</td>
+          </tr>
+          <tr>
+            <td><strong>Production deploy</strong></td>
+            <td>Vercel</td>
+            <td>~60–90s</td>
+            <td>N/A (post-merge)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 10.4 Database Migrations -->
+      <h3><span class="subsection-num">10.4</span> Database Migrations</h3>
+
+      <p>
+        Database migrations use <strong>Drizzle Kit</strong>, which generates SQL migrations from
+        TypeScript schema changes. The migration strategy differs by environment to balance safety
+        with developer velocity.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Environment</th>
+            <th>Migration Strategy</th>
+            <th>Rollback</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Local</strong></td>
+            <td><code>drizzle-kit push</code> — direct schema sync, no migration files</td>
+            <td>Recreate from branch (dev databases are disposable)</td>
+          </tr>
+          <tr>
+            <td><strong>Preview</strong></td>
+            <td><code>drizzle-kit migrate</code> — applies migration files to Neon branch</td>
+            <td>Delete and recreate Neon branch (copy-on-write is instant)</td>
+          </tr>
+          <tr>
+            <td><strong>Staging</strong></td>
+            <td><code>drizzle-kit migrate</code> — same migrations as production</td>
+            <td>Neon point-in-time restore (up to 7 days)</td>
+          </tr>
+          <tr>
+            <td><strong>Production</strong></td>
+            <td><code>drizzle-kit migrate</code> — runs in Vercel build step before deployment</td>
+            <td>Neon point-in-time restore + Vercel deploy rollback. Migration rollback scripts generated but only applied manually</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Migration Safety</div>
+        <p style="margin-bottom:0;">
+          Production migrations are applied <strong>before</strong> the new code deploys. This means
+          the database schema is always forward-compatible with both the old and new application
+          versions during the deployment window. Destructive migrations (dropping columns/tables)
+          are split into two deploys: <strong>(1)</strong> deploy code that stops reading the
+          column, <strong>(2)</strong> deploy migration that drops the column. This prevents
+          errors during the brief overlap when old code is still running.
+        </p>
+      </div>
+
+      <!-- 10.5 Observability -->
+      <h3><span class="subsection-num">10.5</span> Observability</h3>
+
+      <p>
+        Observability follows the <strong>three pillars</strong> model: logs, metrics, and traces.
+        Each is handled by a managed service — no self-hosted Grafana or ELK stacks.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Observability Stack
+  ─────────────────────
+
+  ┌───────────────────────────────────────────────────────────────────┐
+  │                        Application Layer                         │
+  │                                                                   │
+  │   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐        │
+  │   │  Pino        │   │  Sentry      │   │  Vercel      │        │
+  │   │  (Logging)   │   │  (Errors)    │   │  Analytics   │        │
+  │   │              │   │              │   │  (Web Vitals)│        │
+  │   │  Structured  │   │  Stack       │   │              │        │
+  │   │  JSON logs   │   │  traces,     │   │  LCP, FID,   │        │
+  │   │  → Vercel    │   │  breadcrumbs,│   │  CLS, TTFB,  │        │
+  │   │    Log Drain │   │  user ctx    │   │  INP         │        │
+  │   └──────┬───────┘   └──────┬───────┘   └──────┬───────┘        │
+  └──────────┼──────────────────┼──────────────────┼────────────────┘
+             │                  │                  │
+             ▼                  ▼                  ▼
+  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+  │  Log Drain   │   │  Sentry      │   │  Vercel      │
+  │  (Datadog,   │   │  Dashboard   │   │  Dashboard   │
+  │   Axiom, or  │   │              │   │              │
+  │   Betterstack│   │  Alerts:     │   │  Performance │
+  │              │   │  • Slack     │   │  monitoring  │
+  │  Query,      │   │  • PagerDuty │   │  by route    │
+  │  alert,      │   │  • Email     │   │              │
+  │  dashboard   │   │              │   │              │
+  └──────────────┘   └──────────────┘   └──────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 10.3 — Observability: Pino for structured logs, Sentry for error tracking, Vercel Analytics for Web Vitals</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Pillar</th>
+            <th>Tool</th>
+            <th>What It Captures</th>
+            <th>Alert Triggers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Logs</strong></td>
+            <td>Pino → Vercel Log Drain</td>
+            <td>Structured JSON: request ID, userId, operation, duration, errors. GraphQL operations logged with query name and variables (sensitive fields redacted)</td>
+            <td>Error rate &gt;1% over 5 min window; webhook processing failures; rate limit spikes</td>
+          </tr>
+          <tr>
+            <td><strong>Errors</strong></td>
+            <td>Sentry</td>
+            <td>Unhandled exceptions with full stack trace, breadcrumbs (recent user actions), session replay for frontend errors, GraphQL error extensions</td>
+            <td>New error type (first occurrence); error spike (&gt;10 occurrences in 5 min); specific error codes (PAYMENT_FAILED, WEBHOOK_SIGNATURE_INVALID)</td>
+          </tr>
+          <tr>
+            <td><strong>Performance</strong></td>
+            <td>Vercel Analytics + Speed Insights</td>
+            <td>Core Web Vitals per route (LCP, CLS, INP, FID, TTFB), serverless function duration, edge middleware latency</td>
+            <td>LCP &gt;2.5s on catalog pages; serverless function duration &gt;5s; ISR revalidation failures</td>
+          </tr>
+          <tr>
+            <td><strong>Uptime</strong></td>
+            <td>Vercel / BetterStack</td>
+            <td>HTTP health checks on critical endpoints (/api/graphql, /courses, /dashboard)</td>
+            <td>Endpoint down for &gt;30 seconds; response time &gt;3s for 3 consecutive checks</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Structured Logging Example — Pino
+  ────────────────────────────────────
+
+  // GraphQL request log entry
+  {
+    "level": "info",
+    "time": 1710000000000,
+    "requestId": "req_abc123",
+    "userId": "user_xyz",               // null for anonymous
+    "operation": "query",
+    "operationName": "CourseDetail",
+    "variables": { "slug": "intro-to-design" },
+    "duration": 42,                      // ms
+    "cacheStatus": "MISS",
+    "resolverCount": 5,
+    "dataLoaderBatches": 2
+  }
+
+  // Error log entry
+  {
+    "level": "error",
+    "time": 1710000001000,
+    "requestId": "req_def456",
+    "userId": "user_xyz",
+    "operation": "mutation",
+    "operationName": "CreateCheckoutSession",
+    "error": {
+      "code": "STRIPE_ERROR",
+      "message": "Card declined",        // Safe to log (no PII)
+      "stripeCode": "card_declined"
+    }
+  }
+
+  // Webhook log entry
+  {
+    "level": "info",
+    "time": 1710000002000,
+    "webhook": "stripe",
+    "event": "checkout.session.completed",
+    "sessionId": "cs_live_abc",
+    "processingTime": 120,               // ms
+    "enrollmentCreated": true
+  }
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 10.4 — Structured logs: every entry includes request ID, user context, and operation metadata for correlation</p>
+
+      <!-- 10.6 Environment Variables -->
+      <h3><span class="subsection-num">10.6</span> Environment Variables &amp; Secrets</h3>
+
+      <p>
+        All secrets are stored in <strong>Vercel's encrypted environment variables</strong>, scoped
+        per environment (production, preview, development). No secrets in code, no <code>.env</code>
+        files committed to Git, no secrets management service to operate.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Variable</th>
+            <th>Service</th>
+            <th>Environments</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>DATABASE_URL</code></td>
+            <td>Neon Postgres</td>
+            <td>All</td>
+            <td>Neon connection string with pooler. Different branch per environment</td>
+          </tr>
+          <tr>
+            <td><code>UPSTASH_REDIS_REST_URL</code></td>
+            <td>Upstash Redis</td>
+            <td>All</td>
+            <td>REST API URL for edge-compatible Redis access</td>
+          </tr>
+          <tr>
+            <td><code>UPSTASH_REDIS_REST_TOKEN</code></td>
+            <td>Upstash Redis</td>
+            <td>All</td>
+            <td>Authentication token for Redis REST API</td>
+          </tr>
+          <tr>
+            <td><code>CLERK_SECRET_KEY</code></td>
+            <td>Clerk</td>
+            <td>All</td>
+            <td>Server-side Clerk API key. Different key per environment (separate Clerk instances)</td>
+          </tr>
+          <tr>
+            <td><code>NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code></td>
+            <td>Clerk</td>
+            <td>All</td>
+            <td>Client-side publishable key (safe to expose in browser)</td>
+          </tr>
+          <tr>
+            <td><code>STRIPE_SECRET_KEY</code></td>
+            <td>Stripe</td>
+            <td>All</td>
+            <td>Server-side only. Test mode keys for preview/staging, live keys for production</td>
+          </tr>
+          <tr>
+            <td><code>STRIPE_WEBHOOK_SECRET</code></td>
+            <td>Stripe</td>
+            <td>All</td>
+            <td>Webhook signing secret for HMAC verification. Different per environment</td>
+          </tr>
+          <tr>
+            <td><code>CLERK_WEBHOOK_SECRET</code></td>
+            <td>Clerk / Svix</td>
+            <td>All</td>
+            <td>Webhook signing secret for Svix verification</td>
+          </tr>
+          <tr>
+            <td><code>MEILISEARCH_HOST</code></td>
+            <td>Meilisearch Cloud</td>
+            <td>All</td>
+            <td>Meilisearch instance URL</td>
+          </tr>
+          <tr>
+            <td><code>MEILISEARCH_API_KEY</code></td>
+            <td>Meilisearch Cloud</td>
+            <td>All</td>
+            <td>Admin API key (server-side); search-only key generated for client-side</td>
+          </tr>
+          <tr>
+            <td><code>PROVIDER_HUB_WEBHOOK_SECRET</code></td>
+            <td>Provider Hub</td>
+            <td>All</td>
+            <td>Shared secret for verifying Provider Hub webhook signatures</td>
+          </tr>
+          <tr>
+            <td><code>SENTRY_DSN</code></td>
+            <td>Sentry</td>
+            <td>Staging, Production</td>
+            <td>Error tracking ingestion endpoint (not sensitive, but scoped per project)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Secret Rotation</div>
+        <p style="margin-bottom:0;">
+          Webhook secrets and API keys should be rotated quarterly. Vercel's environment variable
+          UI makes rotation straightforward — update the variable and redeploy. Clerk and Stripe
+          support key rotation without downtime (both old and new keys are valid during a
+          configurable overlap window). Neon connection strings change only when creating a new
+          branch, which happens automatically in the preview environment workflow.
+        </p>
+      </div>
+
+      <!-- 10.7 Cost Model -->
+      <h3><span class="subsection-num">10.7</span> Cost Model</h3>
+
+      <p>
+        The fully-managed stack has predictable, usage-based pricing. The following estimates
+        are based on the initial scale target of <strong>10K monthly active students</strong>,
+        scaling to 100K.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Service</th>
+            <th>Tier</th>
+            <th>~10K MAU/mo</th>
+            <th>~100K MAU/mo</th>
+            <th>Cost Driver</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Vercel</strong></td>
+            <td>Pro ($20/seat)</td>
+            <td>$20–40</td>
+            <td>$100–200</td>
+            <td>Team seats + bandwidth overage + serverless invocations</td>
+          </tr>
+          <tr>
+            <td><strong>Neon</strong></td>
+            <td>Scale</td>
+            <td>$20–50</td>
+            <td>$100–300</td>
+            <td>Compute hours (autoscales to zero when idle) + storage</td>
+          </tr>
+          <tr>
+            <td><strong>Upstash Redis</strong></td>
+            <td>Pay-per-request</td>
+            <td>$10–20</td>
+            <td>$50–100</td>
+            <td>Commands per month. Rate limiting + caching are read-heavy</td>
+          </tr>
+          <tr>
+            <td><strong>Clerk</strong></td>
+            <td>Pro</td>
+            <td>$25</td>
+            <td>$100–250</td>
+            <td>Monthly active users. First 10K MAU included in Pro</td>
+          </tr>
+          <tr>
+            <td><strong>Stripe</strong></td>
+            <td>Standard (2.9% + 30¢)</td>
+            <td>Per transaction</td>
+            <td>Per transaction</td>
+            <td>Percentage of revenue, not a fixed infra cost</td>
+          </tr>
+          <tr>
+            <td><strong>Meilisearch Cloud</strong></td>
+            <td>Build</td>
+            <td>$30</td>
+            <td>$60–120</td>
+            <td>Document count + search requests</td>
+          </tr>
+          <tr>
+            <td><strong>Sentry</strong></td>
+            <td>Team</td>
+            <td>$26</td>
+            <td>$26–80</td>
+            <td>Error events per month (50K included in Team)</td>
+          </tr>
+          <tr>
+            <td><strong>Total</strong></td>
+            <td></td>
+            <td><strong>$150–200/mo</strong></td>
+            <td><strong>$450–1,050/mo</strong></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Cost Advantage of Managed Services</div>
+        <p style="margin-bottom:0;">
+          A comparable self-hosted stack (Kubernetes cluster, managed PostgreSQL, Redis cluster,
+          Elasticsearch, monitoring stack) would cost <strong>$500–1,500/mo</strong> at 10K MAU —
+          plus the engineering time to operate it. The managed approach costs 3–5× less at initial
+          scale and eliminates DevOps burden entirely. The tradeoff is less control over infrastructure
+          details, but for a marketplace launch, speed and operational simplicity matter more than
+          infrastructure customization.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 11–12: Placeholder for iterative dev -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
