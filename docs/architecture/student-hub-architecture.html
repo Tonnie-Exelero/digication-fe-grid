@@ -402,7 +402,285 @@
 
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 2–12: Placeholder for iterative dev  -->
+    <!-- SECTION 2: Requirements Summary               -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s2">
+      <h2><span class="section-num">02</span> Requirements Summary</h2>
+
+      <h3><span class="subsection-num">2.1</span> Functional Requirements</h3>
+
+      <p>
+        The Student Hub's feature surface is intentionally focused on the core marketplace loop:
+        <strong>discover → evaluate → purchase → consume → track</strong>. Each functional area
+        below maps directly to this journey.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Feature Area</th>
+            <th>Description</th>
+            <th>Priority</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Course Discovery</strong></td>
+            <td>
+              Full-text search with typo tolerance, category/tag browsing, filtering by price,
+              duration, skill level, and provider. Personalized recommendations based on
+              enrollment history and browsing patterns.
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Course Detail Pages</strong></td>
+            <td>
+              Rich course landing pages with syllabus, provider info, reviews/ratings,
+              pricing, and a preview of content. These pages must be SEO-optimized and
+              shareable (Open Graph / social cards).
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Student Accounts</strong></td>
+            <td>
+              Registration (email + social OAuth), login, profile management, password
+              reset, email verification. Students have a dashboard showing enrolled courses,
+              progress, and purchase history.
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Purchasing &amp; Checkout</strong></td>
+            <td>
+              Single-course purchase via Stripe Checkout or Stripe Elements. Support for
+              discount/promo codes. Purchase confirmation emails. Transaction history
+              accessible from the student dashboard.
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Content Consumption</strong></td>
+            <td>
+              In-app content player for text lessons, interactive exercises, quizzes, and
+              code playgrounds. Linear and non-linear navigation through course modules.
+              Auto-save of progress at the lesson level.
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Progress Tracking</strong></td>
+            <td>
+              Per-lesson and per-course completion tracking. Visual progress indicators
+              on the student dashboard and within the course player. Resume-where-you-left-off
+              functionality.
+            </td>
+            <td>P0 — Launch</td>
+          </tr>
+          <tr>
+            <td><strong>Certificates</strong></td>
+            <td>
+              Auto-generated completion certificates (PDF) upon finishing all required
+              modules in a course. Verifiable via a unique URL. Downloadable and shareable.
+            </td>
+            <td>P1 — Post-launch</td>
+          </tr>
+          <tr>
+            <td><strong>Notifications</strong></td>
+            <td>
+              Push notifications for: enrollment confirmations, course updates from providers,
+              promotional offers, progress reminders. Delivered via in-app notification
+              center and email.
+            </td>
+            <td>P1 — Post-launch</td>
+          </tr>
+          <tr>
+            <td><strong>Reviews &amp; Ratings</strong></td>
+            <td>
+              Students can rate (1–5 stars) and review courses after enrollment. Aggregate
+              ratings displayed on course detail pages. Moderation pipeline for flagging
+              inappropriate content.
+            </td>
+            <td>P1 — Post-launch</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3><span class="subsection-num">2.2</span> Non-Functional Requirements</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Requirement</th>
+            <th>Specification</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Performance</strong></td>
+            <td>
+              LCP &lt; 1.2s (P75), FID &lt; 100ms, CLS &lt; 0.1. JavaScript bundle &lt; 150KB
+              gzipped for initial load. API responses &lt; 200ms (P95).
+            </td>
+            <td>
+              Consumer-grade expectations. Slow catalog pages directly reduce conversion rates —
+              every 100ms of latency costs ~1% in sales.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Scalability</strong></td>
+            <td>
+              Horizontal scaling to 10M+ registered users, 100K+ concurrent sessions.
+              Catalog browsing must scale independently of purchase/enrollment operations.
+            </td>
+            <td>
+              Student user base grows orders of magnitude beyond the provider base.
+              Read-heavy traffic (catalog) must not compete with write-heavy traffic (enrollments).
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Availability</strong></td>
+            <td>
+              99.95% uptime SLA. Checkout flow: 99.99% (degraded mode acceptable elsewhere).
+              Zero data loss on transactions.
+            </td>
+            <td>
+              Payment failures erode trust immediately. A student who fails to purchase
+              once may never return. Catalog can tolerate brief staleness; payments cannot.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Security</strong></td>
+            <td>
+              PCI DSS SAQ-A (via Stripe — no card data touches our servers). OWASP Top 10
+              mitigations. HTTPS everywhere. Content Security Policy. Rate limiting on
+              auth and payment endpoints. Input sanitization on all user-generated content.
+            </td>
+            <td>
+              Financial transactions and student PII demand defense-in-depth. Delegating
+              card handling to Stripe minimizes PCI scope dramatically.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Maintainability</strong></td>
+            <td>
+              End-to-end TypeScript. Monorepo with shared types between frontend and API.
+              Automated CI/CD with preview deployments. &gt; 80% test coverage on critical
+              paths (checkout, auth, enrollment).
+            </td>
+            <td>
+              Type safety across the stack prevents an entire category of runtime bugs.
+              Preview deploys accelerate review cycles. Coverage thresholds protect revenue
+              paths.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Accessibility</strong></td>
+            <td>
+              WCAG 2.1 AA compliance. Keyboard navigation, screen reader support, sufficient
+              color contrast, focus management. Automated a11y testing in CI.
+            </td>
+            <td>
+              Educational platforms serve diverse populations. Accessibility is both a legal
+              requirement in many jurisdictions and the right thing to do for an education
+              product.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Internationalization</strong></td>
+            <td>
+              English-only at launch. Architecture must support: RTL layouts, locale-aware
+              formatting (dates, currency), string externalization, and content translation
+              — all without structural refactoring.
+            </td>
+            <td>
+              Retrofitting i18n is expensive. Baking in the infrastructure now (even unused)
+              is far cheaper than rewiring string handling, layouts, and formatting later.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>SEO</strong></td>
+            <td>
+              Course catalog and detail pages must be server-rendered or statically generated
+              for full crawlability. Structured data (JSON-LD) for courses. Sitemap generation.
+              Social sharing meta tags (Open Graph, Twitter Cards).
+            </td>
+            <td>
+              Organic search is the primary acquisition channel for marketplace platforms.
+              A course page that isn't indexed is a course that won't sell.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3><span class="subsection-num">2.3</span> Constraints &amp; Boundaries</h3>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Hard Constraints</div>
+        <ul style="margin-bottom:0;">
+          <li>
+            <strong>Course data lives in Supabase</strong> — The Provider Marketing Hub stores all course
+            metadata, content, and pricing in a Supabase PostgreSQL instance. The Student Hub must
+            read from this source of truth. It cannot modify provider-side data.
+          </li>
+          <li>
+            <strong>Student data must NOT live in Supabase</strong> — Student profiles, enrollments,
+            progress, and transaction records must be stored in a separate database system, fully
+            decoupled from the provider-side infrastructure.
+          </li>
+          <li>
+            <strong>Separate auth system</strong> — Students authenticate via a dedicated identity
+            provider, not the Supabase Auth used by providers. There is no SSO requirement between
+            the two systems.
+          </li>
+          <li>
+            <strong>Web-only</strong> — No native mobile application. The web app must be fully
+            responsive and performant on mobile browsers, but native apps are out of scope.
+          </li>
+          <li>
+            <strong>Stripe for payments</strong> — All payment processing routes through Stripe.
+            No alternative payment gateways at launch.
+          </li>
+        </ul>
+      </div>
+
+      <h3><span class="subsection-num">2.4</span> User Journey Overview</h3>
+
+      <div class="diagram">
+        <pre>
+  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+  │  DISCOVER   │────▶│  EVALUATE   │────▶│  PURCHASE   │────▶│  CONSUME    │────▶│   TRACK     │
+  │             │     │             │     │             │     │             │     │             │
+  │ • Search    │     │ • Course    │     │ • Stripe    │     │ • Text      │     │ • Progress  │
+  │ • Browse    │     │   detail    │     │   Checkout  │     │   lessons   │     │   dashboard │
+  │ • Filter    │     │ • Syllabus  │     │ • Promo     │     │ • Quizzes   │     │ • Resume    │
+  │ • Recommend │     │ • Reviews   │     │   codes     │     │ • Exercises │     │ • Certs     │
+  │             │     │ • Preview   │     │ • Confirm   │     │ • Code labs │     │ • History   │
+  └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+
+        Anonymous user ─────────────────┤ Authenticated user ─────────────────────────────────────▶
+        (SSG / cached pages)             (SSR / personalized)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 2.1 — Core student journey from discovery through tracking, with rendering strategy alignment</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Design Principle: Anonymous-First</div>
+        <p style="margin-bottom:0;">
+          The most critical pages in the funnel — <strong>discovery and evaluation</strong> — are
+          consumed by anonymous users. These pages must be the fastest, most cacheable, and most
+          SEO-friendly. Authentication is only required at the point of purchase. This directly
+          influences our rendering strategy: static generation for the top of the funnel, server
+          rendering for the authenticated bottom.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 3–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
