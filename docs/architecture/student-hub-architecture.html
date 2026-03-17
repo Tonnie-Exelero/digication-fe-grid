@@ -5979,8 +5979,371 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 12: Placeholder for iterative dev    -->
+    <!-- SECTION 12: Decision Matrix                   -->
     <!-- ──────────────────────────────────────────── -->
+    <section id="s12">
+      <h2><span class="section-num">12</span> Decision Matrix &amp; Trade-offs</h2>
+
+      <p>
+        Every architecture is a set of trade-offs. This section consolidates all major decisions
+        made throughout this document, the alternatives considered, and the reasoning behind each
+        choice. It serves as a reference for future evaluations and a record of architectural intent.
+      </p>
+
+      <!-- 12.1 Technology Decisions -->
+      <h3><span class="subsection-num">12.1</span> Technology Decisions</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Decision</th>
+            <th>Chosen</th>
+            <th>Alternatives Considered</th>
+            <th>Why This Choice</th>
+            <th>Section</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Frontend framework</strong></td>
+            <td>Next.js 14+ (App Router)</td>
+            <td>Remix, Astro, SvelteKit</td>
+            <td>ISR for catalog SEO, React Server Components for data-heavy pages, Vercel integration, team familiarity with React</td>
+            <td>§4</td>
+          </tr>
+          <tr>
+            <td><strong>API layer</strong></td>
+            <td>GraphQL (Pothos + Yoga)</td>
+            <td>tRPC, REST, gRPC</td>
+            <td>Code-first type safety, flexible client queries for varied page shapes, auth scopes plugin, relay-style pagination built-in</td>
+            <td>§5</td>
+          </tr>
+          <tr>
+            <td><strong>Database</strong></td>
+            <td>Neon Postgres</td>
+            <td>Supabase Postgres, PlanetScale, CockroachDB, self-hosted PostgreSQL</td>
+            <td>Serverless-native (autoscale to zero), database branching for preview environments, built-in connection pooler, PostgreSQL compatibility</td>
+            <td>§7</td>
+          </tr>
+          <tr>
+            <td><strong>ORM</strong></td>
+            <td>Drizzle</td>
+            <td>Prisma, Kysely, raw SQL</td>
+            <td>SQL-like API (no abstraction surprise), edge-compatible (no binary engine), TypeScript-first schema definition, migration tooling</td>
+            <td>§7</td>
+          </tr>
+          <tr>
+            <td><strong>Cache / Rate limit</strong></td>
+            <td>Upstash Redis</td>
+            <td>Vercel KV, self-hosted Redis, Cloudflare KV</td>
+            <td>Edge-compatible REST API (works in serverless/edge), built-in rate limiting SDK, pay-per-request pricing, global replication</td>
+            <td>§7, §9</td>
+          </tr>
+          <tr>
+            <td><strong>Search</strong></td>
+            <td>Meilisearch Cloud</td>
+            <td>Elasticsearch, Algolia, Typesense, PostgreSQL full-text</td>
+            <td>Sub-50ms typo-tolerant search, faceted filtering, simpler than Elasticsearch, cheaper than Algolia, better relevance than PostgreSQL FTS</td>
+            <td>§7</td>
+          </tr>
+          <tr>
+            <td><strong>Authentication</strong></td>
+            <td>Clerk</td>
+            <td>NextAuth.js (Auth.js), Supabase Auth, custom JWT</td>
+            <td>Edge middleware integration, managed social OAuth, pre-built UI components, independent from Provider Hub's Supabase Auth</td>
+            <td>§8</td>
+          </tr>
+          <tr>
+            <td><strong>Payments</strong></td>
+            <td>Stripe Checkout</td>
+            <td>Stripe Elements, PayPal, Lemon Squeezy</td>
+            <td>Hosted checkout = PCI SAQ-A (lightest compliance), built-in promo codes, webhook-driven fulfillment, no card data on our servers</td>
+            <td>§6, §9</td>
+          </tr>
+          <tr>
+            <td><strong>Hosting</strong></td>
+            <td>Vercel</td>
+            <td>AWS Amplify, Cloudflare Pages, Netlify, self-hosted</td>
+            <td>First-class Next.js support (built by same team), edge network, preview deploys, ISR, zero-config serverless, built-in analytics</td>
+            <td>§10</td>
+          </tr>
+          <tr>
+            <td><strong>Client data fetching</strong></td>
+            <td>urql</td>
+            <td>Apollo Client, Relay, TanStack Query + fetch</td>
+            <td>Lightweight (~5KB gzipped vs Apollo's ~30KB), document caching by default (simpler mental model), excellent exchange plugin system, first-class SSR support</td>
+            <td>§4</td>
+          </tr>
+          <tr>
+            <td><strong>Styling</strong></td>
+            <td>Tailwind CSS</td>
+            <td>CSS Modules, styled-components, Panda CSS, vanilla-extract</td>
+            <td>Zero-runtime (no CSS-in-JS hydration cost), colocation with markup, design token system via config, excellent production bundle pruning</td>
+            <td>§4</td>
+          </tr>
+          <tr>
+            <td><strong>Linting / Formatting</strong></td>
+            <td>Biome</td>
+            <td>ESLint + Prettier</td>
+            <td>Single tool replaces two, ~100× faster than ESLint (Rust-based), consistent formatting + linting in one pass, zero configuration for TypeScript</td>
+            <td>§10</td>
+          </tr>
+          <tr>
+            <td><strong>Testing</strong></td>
+            <td>Vitest + MSW</td>
+            <td>Jest + nock, Playwright (for unit tests), Cypress</td>
+            <td>Native ESM + TypeScript support, Vite-compatible HMR for test watching, MSW provides realistic GraphQL mocking at the network level</td>
+            <td>§10</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.2 Architectural Decisions -->
+      <h3><span class="subsection-num">12.2</span> Architectural Decisions</h3>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Decision</th>
+            <th>Chosen Approach</th>
+            <th>Alternative</th>
+            <th>Trade-off Accepted</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Separate system from Provider Hub</strong></td>
+            <td>Fully independent app, DB, and auth</td>
+            <td>Extend Provider Hub with student features</td>
+            <td>Data duplication (catalog mirror) in exchange for independent deployability, separate scaling, and no risk to Provider Hub stability</td>
+          </tr>
+          <tr>
+            <td><strong>Webhook-based sync (not API polling)</strong></td>
+            <td>Provider Hub pushes content changes via webhooks</td>
+            <td>Student Hub polls Provider Hub API</td>
+            <td>Eventual consistency (seconds, not milliseconds) in exchange for decoupled systems, no polling overhead, and no dependency on Provider Hub availability during reads</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL over REST</strong></td>
+            <td>Single GraphQL endpoint with typed schema</td>
+            <td>RESTful resource endpoints</td>
+            <td>Schema complexity and learning curve in exchange for flexible queries, reduced over-fetching, single round-trip data loading, and type-safe client codegen</td>
+          </tr>
+          <tr>
+            <td><strong>ISR over SSR for catalog</strong></td>
+            <td>Static generation with 60s revalidation</td>
+            <td>Full SSR on every request</td>
+            <td>Up to 60s staleness in exchange for near-zero server cost for the highest-traffic pages and sub-100ms load times globally</td>
+          </tr>
+          <tr>
+            <td><strong>Managed services over self-hosted</strong></td>
+            <td>Neon, Upstash, Meilisearch Cloud, Clerk, Vercel</td>
+            <td>Self-hosted PostgreSQL, Redis, Elasticsearch on Kubernetes</td>
+            <td>Less infrastructure control and vendor dependency in exchange for zero DevOps overhead, usage-based pricing, and faster time-to-market</td>
+          </tr>
+          <tr>
+            <td><strong>Separate auth systems</strong></td>
+            <td>Clerk for students, Supabase Auth for providers</td>
+            <td>Shared auth system with roles</td>
+            <td>No SSO between student/provider in exchange for complete isolation, independent scaling, and no coupling between the two systems</td>
+          </tr>
+          <tr>
+            <td><strong>Stripe Checkout over Elements</strong></td>
+            <td>Hosted payment page (redirect to Stripe)</td>
+            <td>Embedded payment form (Stripe Elements)</td>
+            <td>Redirect UX (leaves our domain briefly) in exchange for PCI SAQ-A (vs SAQ-A-EP), zero card-handling code, and Stripe-managed compliance</td>
+          </tr>
+          <tr>
+            <td><strong>Code-first GraphQL (Pothos) over SDL-first</strong></td>
+            <td>Schema defined in TypeScript, types inferred</td>
+            <td>Schema defined in .graphql SDL files, resolvers wired separately</td>
+            <td>Less portable schema (no standalone SDL) in exchange for type safety from database to client with zero code generation step, auth scope plugins, and refactoring confidence</td>
+          </tr>
+          <tr>
+            <td><strong>urql over Apollo Client</strong></td>
+            <td>Lightweight, document-cached GraphQL client</td>
+            <td>Apollo Client with normalized cache</td>
+            <td>No normalized cache (refetch instead of cache update for mutations) in exchange for 6× smaller bundle, simpler mental model, and no cache normalization bugs</td>
+          </tr>
+          <tr>
+            <td><strong>No message queue at launch</strong></td>
+            <td>Direct webhook processing, sync operations</td>
+            <td>NATS or RabbitMQ for async processing</td>
+            <td>Less resilience for webhook processing in exchange for reduced operational complexity. Webhook retry (Stripe/Clerk built-in) provides sufficient durability. NATS can be added later as an additive change</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.3 What Could Go Wrong -->
+      <h3><span class="subsection-num">12.3</span> Risk Register</h3>
+
+      <p>
+        The following risks are acknowledged and have explicit mitigation strategies. These are
+        not reasons to avoid the chosen architecture — they are scenarios to monitor and respond
+        to if they materialize.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Risk</th>
+            <th>Likelihood</th>
+            <th>Impact</th>
+            <th>Mitigation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Vendor lock-in (Vercel)</strong></td>
+            <td>Medium</td>
+            <td>Medium</td>
+            <td>Next.js is open-source and runs on any Node.js host. ISR can be replicated with CDN + cache headers. Migration cost is moderate (reimplement edge middleware, ISR, preview deploys)</td>
+          </tr>
+          <tr>
+            <td><strong>Neon outage</strong></td>
+            <td>Low</td>
+            <td>High</td>
+            <td>Neon provides 99.95% SLA. Read traffic survives via cache layers (ISR + Redis). Write traffic (enrollments, payments) would be temporarily unavailable — Stripe webhooks retry for 72h, so no data loss</td>
+          </tr>
+          <tr>
+            <td><strong>Clerk pricing at scale</strong></td>
+            <td>Medium</td>
+            <td>Low</td>
+            <td>At 1M+ MAU, Clerk's per-MAU pricing may become significant. Migration to self-hosted auth (using existing Clerk user export) is feasible but costly in engineering time. Monitor cost/MAU ratio quarterly</td>
+          </tr>
+          <tr>
+            <td><strong>Catalog sync lag</strong></td>
+            <td>Low</td>
+            <td>Low</td>
+            <td>Webhook-based sync typically completes in &lt;5s. If Provider Hub webhook delivery fails, manual resync endpoint exists. Students see "last updated" timestamp on course pages</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL schema evolution</strong></td>
+            <td>Medium</td>
+            <td>Medium</td>
+            <td>Pothos makes schema changes type-safe (breaking changes fail compilation). CI checks for schema breaking changes. Client uses document-based caching (no normalized cache to invalidate). Deprecation-first approach for field removal</td>
+          </tr>
+          <tr>
+            <td><strong>Cold start latency spike</strong></td>
+            <td>Medium</td>
+            <td>Low</td>
+            <td>Serverless cold starts (~200ms) only affect cache misses on non-ISR pages. ISR eliminates cold starts for 90% of traffic. Vercel's "Fluid Compute" feature can pre-warm functions if needed</td>
+          </tr>
+          <tr>
+            <td><strong>Meilisearch index corruption</strong></td>
+            <td>Low</td>
+            <td>Medium</td>
+            <td>Full reindex from PostgreSQL catalog_courses table. Reindex script runs in ~30s for 100K documents. Search degradation doesn't affect purchases or enrollment</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.4 Future Considerations -->
+      <h3><span class="subsection-num">12.4</span> Future Considerations</h3>
+
+      <p>
+        The following capabilities are <strong>not in the launch scope</strong> but are architecturally
+        accommodated — they can be added without significant refactoring.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Capability</th>
+            <th>When to Add</th>
+            <th>Architectural Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Real-time features</strong> (live progress, notifications)</td>
+            <td>When engagement features are prioritized</td>
+            <td>Add NATS as message broker + SSE/WebSocket endpoint. No changes to existing HTTP request flow. GraphQL subscriptions via Yoga's SSE support</td>
+          </tr>
+          <tr>
+            <td><strong>Mobile app</strong> (React Native)</td>
+            <td>When mobile usage exceeds 30% of traffic</td>
+            <td>GraphQL API is already mobile-ready (same schema, same auth via Clerk's React Native SDK). Add rate limit tier for mobile clients</td>
+          </tr>
+          <tr>
+            <td><strong>Subscription pricing</strong> (monthly access)</td>
+            <td>When providers request recurring revenue model</td>
+            <td>Stripe supports subscriptions natively. Add <code>subscription</code> table, webhook handlers for <code>invoice.paid</code>/<code>customer.subscription.deleted</code>. Enrollment model adds <code>access_type: 'lifetime' | 'subscription'</code></td>
+          </tr>
+          <tr>
+            <td><strong>Multi-currency support</strong></td>
+            <td>When launching outside US market</td>
+            <td>Stripe handles currency conversion. Add <code>currency</code> field to Checkout Session creation. Price display uses <code>Intl.NumberFormat</code> based on geo-detection at edge</td>
+          </tr>
+          <tr>
+            <td><strong>Content delivery (video hosting)</strong></td>
+            <td>When providers offer video courses</td>
+            <td>Integrate Mux or Cloudflare Stream. Video URLs stored in course content. Signed URLs for enrolled-student-only access. No change to GraphQL schema (video URL is just a content field)</td>
+          </tr>
+          <tr>
+            <td><strong>Analytics dashboard (for providers)</strong></td>
+            <td>When providers need enrollment/revenue insights</td>
+            <td>Read replica query endpoint (to avoid load on primary). Aggregation queries on enrollment, progress, and review data. Separate API scope (provider auth, not student auth)</td>
+          </tr>
+          <tr>
+            <td><strong>Persisted queries (APQ)</strong></td>
+            <td>When schema stabilizes post-launch</td>
+            <td>Enable Yoga's APQ plugin. Client sends query hash instead of full query. Eliminates arbitrary query injection. Zero schema/resolver changes</td>
+          </tr>
+          <tr>
+            <td><strong>A/B testing</strong></td>
+            <td>When conversion optimization becomes a priority</td>
+            <td>Edge middleware assigns variant via cookie. Server Components read variant from cookie. No client-side flicker. Vercel Edge Config for flag management</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 12.5 Summary -->
+      <h3><span class="subsection-num">12.5</span> Architecture Summary</h3>
+
+      <div class="diagram">
+        <pre>
+  Student Hub — Architecture at a Glance
+  ─────────────────────────────────────────
+
+  PRINCIPLES
+  ──────────
+  1. Separate system     — Independent from Provider Hub; own DB, auth, deployment
+  2. Edge-first reads    — ISR + CDN absorb 90% of traffic at zero server cost
+  3. Managed everything  — No self-hosted infrastructure; ~$150/mo at launch
+  4. Defense in depth    — Auth at edge, API, and service layer independently
+  5. Type-safe pipeline  — Drizzle → Pothos → GraphQL → urql → React (zero gaps)
+
+  STACK
+  ─────
+  Frontend:    Next.js 14+ (App Router) + React Server Components + Tailwind + urql
+  API:         GraphQL Yoga + Pothos (code-first) + Zod validation
+  Database:    Neon Postgres + Drizzle ORM
+  Cache:       Upstash Redis (edge-compatible)
+  Search:      Meilisearch Cloud
+  Auth:        Clerk (managed, edge-native)
+  Payments:    Stripe Checkout (hosted, PCI SAQ-A)
+  Hosting:     Vercel (edge network + serverless)
+  Monitoring:  Sentry (errors) + Pino (logs) + Vercel Analytics (Web Vitals)
+
+  SCALE TARGETS
+  ─────────────
+  Launch:      10K MAU — all services on baseline/free tiers
+  Growth:     100K MAU — tier upgrades only, no architecture changes
+  Future:       1M MAU — add read replicas, evaluate APQ, consider NATS
+
+  KEY TRADE-OFFS
+  ──────────────
+  ✓ Eventual consistency (catalog sync) over tight coupling
+  ✓ Managed services over operational control
+  ✓ ISR staleness (60s) over server cost
+  ✓ Stripe redirect over embedded payment (PCI simplicity)
+  ✓ Separate auth over shared identity (system isolation)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 12.1 — Architecture summary: principles, stack, scale targets, and key trade-offs</p>
+
+    </section>
 
   </main>
 
