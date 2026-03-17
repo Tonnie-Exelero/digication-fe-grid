@@ -1772,7 +1772,477 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 5–12: Placeholder for iterative dev  -->
+    <!-- SECTION 5: BFF Layer (tRPC)                   -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s5">
+      <h2><span class="section-num">05</span> BFF Layer — tRPC v11</h2>
+
+      <p>
+        The Student Hub does not expose a traditional REST or GraphQL API. Instead, it uses
+        <strong>tRPC v11</strong> as a Backend-for-Frontend (BFF) layer — a type-safe RPC framework
+        where the frontend calls server functions directly, with full TypeScript inference from
+        database to UI component. There are no API schemas to write, no code generators to run,
+        and no runtime type mismatches.
+      </p>
+
+      <!-- 5.1 Why tRPC -->
+      <h3><span class="subsection-num">5.1</span> Why tRPC Over REST or GraphQL</h3>
+
+      <p>
+        The BFF pattern means the API exists solely to serve <em>this</em> frontend. There are no
+        third-party consumers, no mobile apps hitting the same endpoints, no public API contract to
+        maintain. This constraint makes tRPC the optimal choice:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criterion</th>
+            <th>REST</th>
+            <th>GraphQL</th>
+            <th>tRPC</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Type safety</strong></td>
+            <td>Manual (OpenAPI + codegen)</td>
+            <td>Schema + codegen (GraphQL Code Generator)</td>
+            <td>Automatic — TypeScript inference, zero codegen</td>
+          </tr>
+          <tr>
+            <td><strong>Boilerplate</strong></td>
+            <td>Route definitions, request/response types, validation middleware</td>
+            <td>Schema definitions, resolvers, type mappings</td>
+            <td>Just write a function — input/output types are inferred</td>
+          </tr>
+          <tr>
+            <td><strong>Overfetching / underfetching</strong></td>
+            <td>Common — fixed response shapes</td>
+            <td>Solved — client queries only what it needs</td>
+            <td>N/A — each procedure returns exactly what the page needs (BFF pattern)</td>
+          </tr>
+          <tr>
+            <td><strong>Caching</strong></td>
+            <td>HTTP-level (CDN, ETags)</td>
+            <td>Complex (normalized cache, persisted queries)</td>
+            <td>TanStack Query handles client-side caching; ISR handles edge caching</td>
+          </tr>
+          <tr>
+            <td><strong>Learning curve</strong></td>
+            <td>Low</td>
+            <td>Moderate–High (schema language, resolvers, N+1 problem)</td>
+            <td>Low — if you know TypeScript, you know tRPC</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-client support</strong></td>
+            <td>Excellent</td>
+            <td>Excellent</td>
+            <td>TypeScript clients only — perfect for a Next.js monorepo, poor for third parties</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">When tRPC Would Be the Wrong Choice</div>
+        <p style="margin-bottom:0;">
+          If the Student Hub needed to serve a native mobile app or expose a public API for
+          third-party integrations, tRPC would be a liability — it requires a TypeScript client.
+          In that scenario, GraphQL (for flexible multi-client queries) or REST with OpenAPI (for
+          broad compatibility) would be better. The current architecture explicitly scopes the
+          API to a single Next.js frontend. If a mobile app is added later, a thin REST/GraphQL
+          gateway can be placed in front of the existing tRPC procedures without rewriting business logic.
+        </p>
+      </div>
+
+      <!-- 5.2 Router Architecture -->
+      <h3><span class="subsection-num">5.2</span> Router Architecture</h3>
+
+      <p>
+        tRPC organizes procedures into <strong>routers</strong>, which are composable and nestable.
+        The Student Hub's router tree mirrors the domain model — each router owns the procedures
+        for a single bounded context.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  tRPC Router Tree
+  ─────────────────
+
+  appRouter
+  │
+  ├── course                        # Course catalog & discovery
+  │   ├── list                      #   query  — paginated catalog with filters
+  │   ├── getBySlug                 #   query  — single course detail (ISR-compatible)
+  │   ├── getFeatured               #   query  — homepage featured courses
+  │   └── search                    #   query  — Meilisearch proxy with type safety
+  │
+  ├── enrollment                    # Student enrollments & progress
+  │   ├── listMine                  #   query  — current student's enrollments
+  │   ├── getProgress               #   query  — detailed progress for one enrollment
+  │   ├── updateProgress            #   mutation — mark lesson complete / save position
+  │   └── getCertificate            #   query  — generate/fetch completion certificate
+  │
+  ├── payment                       # Checkout & transactions
+  │   ├── createCheckoutSession     #   mutation — create Stripe Checkout session
+  │   ├── verifyPromoCode           #   query  — validate discount code
+  │   └── listTransactions          #   query  — student's purchase history
+  │
+  ├── review                        # Course reviews & ratings
+  │   ├── listByCourse              #   query  — paginated reviews for a course
+  │   ├── create                    #   mutation — submit a new review
+  │   └── getMyReview               #   query  — current student's review for a course
+  │
+  ├── user                          # Student profile
+  │   ├── getProfile                #   query  — current student's profile
+  │   └── updateProfile             #   mutation — edit display name, avatar, preferences
+  │
+  └── notification                  # In-app notifications
+      ├── list                      #   query  — paginated notification feed
+      ├── markRead                  #   mutation — mark one or all as read
+      └── getUnreadCount            #   query  — badge count for the notification bell
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.1 — tRPC router tree: each router owns a domain, procedures are queries or mutations</p>
+
+      <!-- 5.3 Procedure Anatomy -->
+      <h3><span class="subsection-num">5.3</span> Procedure Anatomy &amp; Type Flow</h3>
+
+      <p>
+        Every tRPC procedure follows the same structure: <strong>input validation → middleware
+        pipeline → handler → typed output</strong>. Zod schemas define the input contract and are
+        shared with frontend form validation, eliminating duplication.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Type Flow — End-to-End (No Codegen)
+  ─────────────────────────────────────
+
+  ┌───────────────────────────────────────────────────────────────────────┐
+  │  SHARED: lib/validators/course.ts                                    │
+  │                                                                       │
+  │  export const courseListInput = z.object({                            │
+  │    query: z.string().optional(),                                      │
+  │    category: z.enum([...]).optional(),                                │
+  │    sort: z.enum(['popular','newest','price_asc','price_desc']),       │
+  │    page: z.number().int().min(1).default(1),                         │
+  │    perPage: z.number().int().min(1).max(50).default(12),             │
+  │  });                                                                  │
+  └──────────────────────────┬────────────────────────────────────────────┘
+                             │ imported by both sides
+          ┌──────────────────┼──────────────────┐
+          ▼                                      ▼
+  ┌───────────────────────┐            ┌─────────────────────────────────┐
+  │  SERVER: tRPC Router   │            │  CLIENT: React Component        │
+  │                        │            │                                  │
+  │  course.list = public  │            │  const { data } =               │
+  │    .input(courseList   │            │    trpc.course.list.useQuery({  │
+  │      Input)            │            │      sort: 'popular',  ← typed │
+  │    .query(({ input })  │            │      page: 2,          ← typed │
+  │      => {              │            │    });                           │
+  │      // input is fully │            │                                  │
+  │      // typed from Zod │            │  data.courses[0].title ← typed │
+  │      return db.select()│            │  data.totalPages       ← typed │
+  │        ...             │            │                                  │
+  │    });                 │            │  // Autocomplete works.          │
+  │                        │            │  // Type errors caught at build. │
+  └───────────────────────┘            └─────────────────────────────────┘
+
+  Zero codegen. Zero schema files. Just TypeScript inference.
+  Change the return type on the server → the client shows a type error instantly.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.2 — End-to-end type safety: Zod schema is written once, TypeScript infers everything else</p>
+
+      <!-- 5.4 Middleware Pipeline -->
+      <h3><span class="subsection-num">5.4</span> Middleware Pipeline</h3>
+
+      <p>
+        tRPC middleware runs before procedure handlers, forming a composable pipeline. The Student
+        Hub defines three middleware layers that procedures opt into based on their requirements.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Middleware Pipeline — Request Lifecycle
+  ────────────────────────────────────────
+
+  Incoming Request
+       │
+       ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  1. publicProcedure                                          │
+  │     • Parses request headers                                 │
+  │     • Attaches database connection to context                │
+  │     • Sets request ID for tracing                            │
+  │     • Available to: ALL procedures                           │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  2. protectedProcedure (extends public)                      │
+  │     • Verifies Clerk session token via getAuth()             │
+  │     • Rejects with UNAUTHORIZED if no valid session          │
+  │     • Attaches userId and sessionClaims to context           │
+  │     • Available to: dashboard, enrollment, payment, profile  │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  3. rateLimitedProcedure (extends protected)                 │
+  │     • Checks Upstash Redis rate limit (sliding window)       │
+  │     • Default: 100 requests / 60 seconds per userId          │
+  │     • Stricter limits on mutations (20 / 60s)                │
+  │     • Rejects with TOO_MANY_REQUESTS + Retry-After header    │
+  │     • Available to: write operations (purchases, reviews)    │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+                   Procedure Handler
+                   (business logic)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.3 — Middleware pipeline: each layer adds context and guards; procedures choose their entry point</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Procedure Base</th>
+            <th>Auth Required</th>
+            <th>Rate Limited</th>
+            <th>Used By</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>publicProcedure</code></td>
+            <td>No</td>
+            <td>No (edge-cached)</td>
+            <td><code>course.list</code>, <code>course.getBySlug</code>, <code>course.search</code>, <code>review.listByCourse</code></td>
+          </tr>
+          <tr>
+            <td><code>protectedProcedure</code></td>
+            <td>Yes</td>
+            <td>No</td>
+            <td><code>enrollment.listMine</code>, <code>user.getProfile</code>, <code>notification.list</code></td>
+          </tr>
+          <tr>
+            <td><code>rateLimitedProcedure</code></td>
+            <td>Yes</td>
+            <td>Yes</td>
+            <td><code>payment.createCheckoutSession</code>, <code>review.create</code>, <code>enrollment.updateProgress</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 5.5 Server-Side Calls -->
+      <h3><span class="subsection-num">5.5</span> Server-Side Calls (RSC Integration)</h3>
+
+      <p>
+        In the App Router, React Server Components can call tRPC procedures <strong>directly on the
+        server</strong> — no HTTP round-trip, no serialization overhead. This is the primary data
+        fetching pattern for SSR and ISR pages.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Two Calling Patterns
+  ─────────────────────
+
+  Pattern A: Server Component (SSR / ISR pages)
+  ──────────────────────────────────────────────
+
+  ┌─────────────────────────┐          ┌─────────────────────┐
+  │  page.tsx (Server)      │  direct  │  tRPC Router         │
+  │                         │  call    │                      │
+  │  const courses = await  │─────────▶│  course.list()       │
+  │    caller.course.list() │  (no HTTP)│                     │
+  │                         │          │  Returns typed data   │
+  │  return &lt;CourseGrid    │◀─────────│                      │
+  │    courses={courses} /&gt;│          └─────────────────────┘
+  └─────────────────────────┘
+  Latency: ~5ms (function call, same process)
+
+
+  Pattern B: Client Component (interactive features)
+  ──────────────────────────────────────────────────
+
+  ┌─────────────────────────┐  HTTP    ┌──────────────────────┐
+  │  PlayerSidebar (Client) │  POST    │  /api/trpc/[trpc]    │
+  │                         │─────────▶│  (API Route handler)  │
+  │  const { mutate } =     │          │                      │
+  │    trpc.enrollment      │          │  enrollment           │
+  │    .updateProgress      │          │    .updateProgress()  │
+  │    .useMutation()       │          │                      │
+  │                         │◀─────────│  Returns typed data   │
+  │  mutate({ lessonId,     │  JSON    └──────────────────────┘
+  │    completed: true })   │
+  └─────────────────────────┘
+  Latency: ~30-80ms (HTTP, but optimistic update makes it feel instant)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.4 — Two calling patterns: server components call directly (zero HTTP), client components call via API route</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Prefetching &amp; Hydration</div>
+        <p style="margin-bottom:0;">
+          For pages that are server-rendered but contain client-interactive elements (e.g., the
+          dashboard), the server prefetches data via the tRPC caller and <strong>dehydrates</strong>
+          the TanStack Query cache into the HTML payload. When the client hydrates, TanStack Query
+          picks up the pre-filled cache — no loading spinner, no duplicate fetch. This is configured
+          via <code>createSSRHelper()</code> in the page's server component, and the dehydrated state
+          is passed through a <code>&lt;HydrationBoundary&gt;</code> provider.
+        </p>
+      </div>
+
+      <!-- 5.6 Error Handling -->
+      <h3><span class="subsection-num">5.6</span> Error Handling &amp; Error Codes</h3>
+
+      <p>
+        tRPC uses typed error codes that map to HTTP status codes. The Student Hub defines a
+        consistent error contract so the frontend can handle every failure gracefully.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>tRPC Error Code</th>
+            <th>HTTP Status</th>
+            <th>When Used</th>
+            <th>Frontend Handling</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>BAD_REQUEST</code></td>
+            <td>400</td>
+            <td>Zod validation failure on input</td>
+            <td>Show field-level errors on the form (Zod errors are structured)</td>
+          </tr>
+          <tr>
+            <td><code>UNAUTHORIZED</code></td>
+            <td>401</td>
+            <td>No valid Clerk session</td>
+            <td>Redirect to <code>/sign-in</code> with return URL</td>
+          </tr>
+          <tr>
+            <td><code>FORBIDDEN</code></td>
+            <td>403</td>
+            <td>Valid session but insufficient permissions (e.g., accessing another student's data)</td>
+            <td>Show "access denied" message</td>
+          </tr>
+          <tr>
+            <td><code>NOT_FOUND</code></td>
+            <td>404</td>
+            <td>Course slug doesn't exist, enrollment not found</td>
+            <td>Show 404 page or "course not found" UI</td>
+          </tr>
+          <tr>
+            <td><code>TOO_MANY_REQUESTS</code></td>
+            <td>429</td>
+            <td>Rate limit exceeded</td>
+            <td>Show retry message with countdown timer</td>
+          </tr>
+          <tr>
+            <td><code>INTERNAL_SERVER_ERROR</code></td>
+            <td>500</td>
+            <td>Unhandled exception in procedure handler</td>
+            <td>Show generic error + report to Sentry; error details never leaked to client</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Error Boundary Integration</div>
+        <p style="margin-bottom:0;">
+          Each route segment in the App Router has an <code>error.tsx</code> boundary that catches
+          tRPC errors thrown during SSR. For client-side errors, TanStack Query's <code>onError</code>
+          callback feeds into a centralized error handler that logs to Sentry, shows a toast
+          notification for recoverable errors, and redirects for auth errors. The user never sees
+          a raw stack trace or a blank white page.
+        </p>
+      </div>
+
+      <!-- 5.7 API Route Configuration -->
+      <h3><span class="subsection-num">5.7</span> API Route &amp; Transport Configuration</h3>
+
+      <p>
+        The tRPC API is exposed via a single catch-all Next.js API route at
+        <code>/api/trpc/[trpc]/route.ts</code>. This handler processes all client-side tRPC calls
+        over HTTP.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Configuration</th>
+            <th>Value</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Transport</strong></td>
+            <td>HTTP (httpBatchLink)</td>
+            <td>Batches multiple concurrent queries into a single HTTP request, reducing round trips</td>
+          </tr>
+          <tr>
+            <td><strong>Serialization</strong></td>
+            <td>SuperJSON</td>
+            <td>Preserves Date, Map, Set, BigInt, and other JS types that JSON.stringify loses</td>
+          </tr>
+          <tr>
+            <td><strong>Max batch size</strong></td>
+            <td>10 procedures per request</td>
+            <td>Prevents abuse; typical page load batches 2–4 queries</td>
+          </tr>
+          <tr>
+            <td><strong>Request timeout</strong></td>
+            <td>10 seconds</td>
+            <td>Generous enough for Stripe session creation; short enough to fail fast on hung connections</td>
+          </tr>
+          <tr>
+            <td><strong>Response caching</strong></td>
+            <td>Per-procedure <code>Cache-Control</code> headers for public queries</td>
+            <td>Public queries (<code>course.list</code>, <code>course.getBySlug</code>) return <code>s-maxage=60, stale-while-revalidate=300</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Request Batching — How httpBatchLink Works
+  ────────────────────────────────────────────
+
+  Without batching (3 HTTP requests):
+  ┌────────┐     GET /api/trpc/course.getBySlug     ┌────────┐
+  │        │────────────────────────────────────────▶│        │
+  │        │◀────────────────────────────────────────│        │
+  │        │     GET /api/trpc/review.listByCourse   │        │
+  │ Client │────────────────────────────────────────▶│ Server │
+  │        │◀────────────────────────────────────────│        │
+  │        │     GET /api/trpc/course.getFeatured     │        │
+  │        │────────────────────────────────────────▶│        │
+  │        │◀────────────────────────────────────────│        │
+  └────────┘                                         └────────┘
+  3 round trips × ~30ms = ~90ms network overhead
+
+  With httpBatchLink (1 HTTP request):
+  ┌────────┐     GET /api/trpc/course.getBySlug,     ┌────────┐
+  │        │         review.listByCourse,             │        │
+  │ Client │────────────────────────────────────────▶│ Server │
+  │        │◀────────────────────────────────────────│        │
+  └────────┘         course.getFeatured              └────────┘
+  1 round trip × ~30ms = ~30ms network overhead (3x improvement)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.5 — Request batching: httpBatchLink combines concurrent queries into a single HTTP request</p>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 6–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
