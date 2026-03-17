@@ -775,7 +775,7 @@
  │                                      │                                                       │
  │                                      ▼                                                       │
  │                    ┌──────────────────────────────────┐                                      │
- │                    │   SUPABASE (Provider Hub DB)      │                                      │
+ │                    │   SUPABASE (Marketing Hub DB)      │                                      │
  │                    │                                  │                                      │
  │                    │   • courses                      │                                      │
  │                    │   • modules / lessons            │                                      │
@@ -796,7 +796,7 @@
                       └──────────────────────────────────┘
         </pre>
       </div>
-      <p class="diagram-caption">Figure 3.1 — Full system architecture from edge to data stores, showing the separation between Student Hub and Provider Hub</p>
+      <p class="diagram-caption">Figure 3.1 — Full system architecture from edge to data stores, showing the separation between Student Hub and Marketing Hub</p>
 
       <h3><span class="subsection-num">3.2</span> Architectural Principles</h3>
 
@@ -839,12 +839,12 @@
           <tr>
             <td><strong>Provider Isolation</strong></td>
             <td>
-              The Student Hub never writes to the Provider Hub's Supabase. Data
+              The Student Hub never writes to the Marketing Hub's Supabase. Data
               flows one direction: Provider → Student Hub via a sync service.
             </td>
             <td>
               Course Sync Service reads from Supabase (Realtime subscriptions or
-              polling). If the Provider Hub goes down, the Student Hub continues
+              polling). If the Marketing Hub goes down, the Student Hub continues
               serving from its local catalog mirror.
             </td>
           </tr>
@@ -939,7 +939,7 @@
       <h3 style="font-size: 1.1rem; margin-top: 24px;"><strong>Pattern C:</strong> Course Sync (Background, Provider → Student Hub)</h3>
       <div class="diagram">
         <pre>
-  Supabase (Provider Hub)          Course Sync Service              Student Hub Stores
+  Supabase (Marketing Hub)          Course Sync Service              Student Hub Stores
        │                                  │                              │
        │  Realtime: course updated        │                              │
        │ ────────────────────────────────▶│                              │
@@ -1847,7 +1847,7 @@
       <div class="callout callout-info">
         <div class="callout-title">Consistency with the Supabase Ecosystem</div>
         <p style="margin-bottom:0;">
-          The Provider Hub already uses GraphQL via Supabase's auto-generated GraphQL layer (pg_graphql).
+          The Marketing Hub already uses GraphQL via Supabase's auto-generated GraphQL layer (pg_graphql).
           Using GraphQL for the Student Hub keeps the team on a single query language across both
           systems, simplifies onboarding, and enables future schema stitching if the two APIs need
           to be composed into a unified gateway.
@@ -2449,7 +2449,7 @@
 
       <p>
         The Catalog Service is the read-heavy core of the platform. It manages the local copy of
-        course data synced from the Provider Hub (Supabase) and serves it to the frontend via
+        course data synced from the Marketing Hub (Supabase) and serves it to the frontend via
         ISR-cached queries.
       </p>
 
@@ -2477,7 +2477,7 @@
             </td>
           </tr>
           <tr>
-            <td><strong>Course sync from Provider Hub</strong></td>
+            <td><strong>Course sync from Marketing Hub</strong></td>
             <td>
               Listens to Supabase Realtime events on the provider's <code>courses</code> table.
               On change: fetches full course data, transforms the schema to the Student Hub's
@@ -2539,7 +2539,7 @@
        │                                    │  7. Trigger ISR revalidation  │ Vercel
         </pre>
       </div>
-      <p class="diagram-caption">Figure 6.2 — Catalog sync: idempotent, transactional upsert from Provider Hub to local stores</p>
+      <p class="diagram-caption">Figure 6.2 — Catalog sync: idempotent, transactional upsert from Marketing Hub to local stores</p>
 
       <!-- 6.3 Payment Service -->
       <h3><span class="subsection-num">6.3</span> Payment Service</h3>
@@ -3030,9 +3030,9 @@
       </table>
 
       <div class="callout callout-info">
-        <div class="callout-title">Separation from Provider Hub</div>
+        <div class="callout-title">Separation from Marketing Hub</div>
         <p style="margin-bottom:0;">
-          The Student Hub has its own Neon database, completely separate from the Provider Hub's
+          The Student Hub has its own Neon database, completely separate from the Marketing Hub's
           Supabase Postgres. Course data is synchronized via a one-way sync mechanism (Section 6.1),
           not shared database access. This ensures the Student Hub can never corrupt provider data,
           and each system scales independently.
@@ -3506,18 +3506,18 @@
       <h3><span class="subsection-num">7.7</span> Provider Data Synchronization</h3>
 
       <p>
-        Course data originates in the <strong>Provider Hub</strong> (Supabase Postgres) and must be
+        Course data originates in the <strong>Marketing Hub</strong> (Supabase Postgres) and must be
         replicated to the Student Hub's Neon Postgres. This is a one-way, event-driven sync — the
-        Student Hub never writes back to the Provider Hub.
+        Student Hub never writes back to the Marketing Hub.
       </p>
 
       <div class="diagram">
         <pre>
-  Data Sync — Provider Hub → Student Hub
+  Data Sync — Marketing Hub → Student Hub
   ─────────────────────────────────────────
 
   ┌───────────────────┐                    ┌───────────────────┐
-  │  Provider Hub     │                    │  Student Hub      │
+  │  Marketing Hub     │                    │  Student Hub      │
   │  (Supabase)       │                    │  (Neon Postgres)  │
   │                   │                    │                   │
   │  courses          │    Webhook POST    │  courses (synced) │
@@ -3546,7 +3546,7 @@
   • Resilient — failed syncs retry (Supabase webhook retry policy)
         </pre>
       </div>
-      <p class="diagram-caption">Figure 7.6 — Data sync: one-way replication from Provider Hub via signed webhooks, idempotent upserts</p>
+      <p class="diagram-caption">Figure 7.6 — Data sync: one-way replication from Marketing Hub via signed webhooks, idempotent upserts</p>
 
     </section>
 
@@ -3560,7 +3560,7 @@
         Authentication is handled by <strong>Clerk</strong>, a managed identity platform that provides
         registration, login, session management, MFA, and social OAuth — all without building or
         maintaining auth infrastructure. The Student Hub's auth system is <strong>completely separate</strong>
-        from the Provider Hub's Supabase Auth — there is no SSO between them, no shared user table,
+        from the Marketing Hub's Supabase Auth — there is no SSO between them, no shared user table,
         and no cross-system session. This is intentional: students and providers are different
         user populations with different identity requirements.
       </p>
@@ -3621,10 +3621,10 @@
             <td>Triggers via Supabase Functions</td>
           </tr>
           <tr>
-            <td><strong>Separation from Provider Hub</strong></td>
+            <td><strong>Separation from Marketing Hub</strong></td>
             <td>Fully independent — own tenant, own user pool</td>
             <td>Independent (custom deployment)</td>
-            <td>Coupled to Supabase project — would share infra with Provider Hub</td>
+            <td>Coupled to Supabase project — would share infra with Marketing Hub</td>
           </tr>
         </tbody>
       </table>
@@ -3632,9 +3632,9 @@
       <div class="callout callout-warning">
         <div class="callout-title">Why Not Supabase Auth for Students?</div>
         <p style="margin-bottom:0;">
-          The Provider Hub uses Supabase Auth because providers are tightly coupled to Supabase's
+          The Marketing Hub uses Supabase Auth because providers are tightly coupled to Supabase's
           database and RLS policies. Using Supabase Auth for students would either <strong>(a)</strong>
-          require the Student Hub to depend on the Provider Hub's Supabase project (creating a
+          require the Student Hub to depend on the Marketing Hub's Supabase project (creating a
           dangerous coupling), or <strong>(b)</strong> require a second Supabase project just for auth
           (unnecessary complexity when Clerk does it better for Next.js). Clerk provides cleaner
           separation, better edge middleware support, and a richer component library.
@@ -4638,7 +4638,7 @@
 
       <p>
         Webhooks are the primary ingress for external events (Stripe payments, Clerk user lifecycle,
-        Provider Hub content sync). Each webhook source uses cryptographic signature verification
+        Marketing Hub content sync). Each webhook source uses cryptographic signature verification
         to prevent spoofing.
       </p>
 
@@ -4665,7 +4665,7 @@
             <td>Message ID deduplication + timestamp tolerance. Svix retries with exponential backoff for 3 days</td>
           </tr>
           <tr>
-            <td><strong>Provider Hub</strong></td>
+            <td><strong>Marketing Hub</strong></td>
             <td>HMAC-SHA256 with shared secret</td>
             <td>Custom verification: <code>crypto.timingSafeEqual(computedSig, receivedSig)</code></td>
             <td>Timestamp in payload, reject if &gt;5 min old. Nonce-based deduplication via Redis</td>
@@ -5365,10 +5365,10 @@
             <td>Admin API key (server-side); search-only key generated for client-side</td>
           </tr>
           <tr>
-            <td><code>PROVIDER_HUB_WEBHOOK_SECRET</code></td>
-            <td>Provider Hub</td>
+            <td><code>MARKETING_HUB_WEBHOOK_SECRET</code></td>
+            <td>Marketing Hub</td>
             <td>All</td>
-            <td>Shared secret for verifying Provider Hub webhook signatures</td>
+            <td>Shared secret for verifying Marketing Hub webhook signatures</td>
           </tr>
           <tr>
             <td><code>SENTRY_DSN</code></td>
@@ -6050,7 +6050,7 @@
             <td><strong>Authentication</strong></td>
             <td>Clerk</td>
             <td>NextAuth.js (Auth.js), Supabase Auth, custom JWT</td>
-            <td>Edge middleware integration, managed social OAuth, pre-built UI components, independent from Provider Hub's Supabase Auth</td>
+            <td>Edge middleware integration, managed social OAuth, pre-built UI components, independent from Marketing Hub's Supabase Auth</td>
             <td>§8</td>
           </tr>
           <tr>
@@ -6112,16 +6112,16 @@
         </thead>
         <tbody>
           <tr>
-            <td><strong>Separate system from Provider Hub</strong></td>
+            <td><strong>Separate system from Marketing Hub</strong></td>
             <td>Fully independent app, DB, and auth</td>
-            <td>Extend Provider Hub with student features</td>
-            <td>Data duplication (catalog mirror) in exchange for independent deployability, separate scaling, and no risk to Provider Hub stability</td>
+            <td>Extend Marketing Hub with student features</td>
+            <td>Data duplication (catalog mirror) in exchange for independent deployability, separate scaling, and no risk to Marketing Hub stability</td>
           </tr>
           <tr>
             <td><strong>Webhook-based sync (not API polling)</strong></td>
-            <td>Provider Hub pushes content changes via webhooks</td>
-            <td>Student Hub polls Provider Hub API</td>
-            <td>Eventual consistency (seconds, not milliseconds) in exchange for decoupled systems, no polling overhead, and no dependency on Provider Hub availability during reads</td>
+            <td>Marketing Hub pushes content changes via webhooks</td>
+            <td>Student Hub polls Marketing Hub API</td>
+            <td>Eventual consistency (seconds, not milliseconds) in exchange for decoupled systems, no polling overhead, and no dependency on Marketing Hub availability during reads</td>
           </tr>
           <tr>
             <td><strong>GraphQL over REST</strong></td>
@@ -6215,7 +6215,7 @@
             <td><strong>Catalog sync lag</strong></td>
             <td>Low</td>
             <td>Low</td>
-            <td>Webhook-based sync typically completes in &lt;5s. If Provider Hub webhook delivery fails, manual resync endpoint exists. Students see "last updated" timestamp on course pages</td>
+            <td>Webhook-based sync typically completes in &lt;5s. If Marketing Hub webhook delivery fails, manual resync endpoint exists. Students see "last updated" timestamp on course pages</td>
           </tr>
           <tr>
             <td><strong>GraphQL schema evolution</strong></td>
@@ -6308,7 +6308,7 @@
 
   PRINCIPLES
   ──────────
-  1. Separate system     — Independent from Provider Hub; own DB, auth, deployment
+  1. Separate system     — Independent from Marketing Hub; own DB, auth, deployment
   2. Edge-first reads    — ISR + CDN absorb 90% of traffic at zero server cost
   3. Managed everything  — No self-hosted infrastructure; ~$150/mo at launch
   4. Defense in depth    — Auth at edge, API, and service layer independently

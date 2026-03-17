@@ -255,9 +255,9 @@
       <p>
         The <strong>Student Hub</strong> is a new course marketplace where students discover,
         purchase, and consume educational content published by providers on Digication's existing
-        <strong>Provider Hub</strong>. It is architected as a <strong>fully independent system</strong>
+        <strong>Marketing Hub</strong>. It is architected as a <strong>fully independent system</strong>
         — separate application, database, authentication, and deployment — that receives content
-        from the Provider Hub via webhooks.
+        from the Marketing Hub via webhooks.
       </p>
 
       <h3>Core User Journey</h3>
@@ -271,8 +271,8 @@
       <h3>Why a Separate System?</h3>
       <ul>
         <li><strong>Different users</strong> — Students and providers have different identity requirements, traffic patterns, and feature needs</li>
-        <li><strong>Independent scaling</strong> — Read-heavy catalog browsing (90% of traffic) must not compete with Provider Hub's write-heavy content management</li>
-        <li><strong>Deployment isolation</strong> — Ship student features without risking Provider Hub stability</li>
+        <li><strong>Independent scaling</strong> — Read-heavy catalog browsing (90% of traffic) must not compete with Marketing Hub's write-heavy content management</li>
+        <li><strong>Deployment isolation</strong> — Ship student features without risking Marketing Hub stability</li>
         <li><strong>Technology fit</strong> — Edge-first SSG/ISR for catalog pages, separate auth (Clerk vs Supabase Auth), dedicated search index</li>
       </ul>
     </section>
@@ -386,7 +386,7 @@
 
   External Integration:
   ┌──────────────┐   Webhooks (content sync)
-  │ Provider Hub │ ─────────────────────────▶  Student Hub webhook handler
+  │ Marketing Hub │ ─────────────────────────▶  Student Hub webhook handler
   │ (Supabase)   │                             → PostgreSQL + Meilisearch + Redis
   └──────────────┘
         </pre>
@@ -398,7 +398,7 @@
         <li><strong>Catalog reads (90% of traffic):</strong> Edge CDN → ISR cache → (on miss) Server Component → Redis cache → PostgreSQL. Sub-100ms for cache hits</li>
         <li><strong>Search:</strong> Client → Meilisearch (direct, sub-50ms). Index synced from PostgreSQL on content webhook</li>
         <li><strong>Purchases:</strong> GraphQL mutation → Stripe Checkout Session → redirect to Stripe → webhook → enrollment creation in PostgreSQL</li>
-        <li><strong>Content sync:</strong> Provider Hub webhook → verify HMAC → upsert to PostgreSQL + Meilisearch + bust Redis/ISR cache</li>
+        <li><strong>Content sync:</strong> Marketing Hub webhook → verify HMAC → upsert to PostgreSQL + Meilisearch + bust Redis/ISR cache</li>
       </ul>
     </section>
 
@@ -424,7 +424,7 @@
   ├── (checkout)/           # Purchase flow — SSR
   └── api/
       ├── graphql/          # Single GraphQL endpoint
-      └── webhooks/         # Stripe, Clerk, Provider Hub
+      └── webhooks/         # Stripe, Clerk, Marketing Hub
         </pre>
       </div>
 
@@ -465,7 +465,7 @@
 
       <h3>Database Schema</h3>
       <p>
-        The database stores a <strong>read-optimized catalog mirror</strong> (synced from Provider Hub),
+        The database stores a <strong>read-optimized catalog mirror</strong> (synced from Marketing Hub),
         plus student-owned data: enrollments, progress, reviews, and notifications. Key tables:
       </p>
 
@@ -474,7 +474,7 @@
           <tr><th>Table</th><th>Purpose</th><th>Key Relationships</th></tr>
         </thead>
         <tbody>
-          <tr><td><code>catalog_courses</code></td><td>Course data mirror from Provider Hub</td><td>Referenced by enrollments, reviews, search index</td></tr>
+          <tr><td><code>catalog_courses</code></td><td>Course data mirror from Marketing Hub</td><td>Referenced by enrollments, reviews, search index</td></tr>
           <tr><td><code>catalog_providers</code></td><td>Provider profile mirror</td><td>One-to-many with courses</td></tr>
           <tr><td><code>enrollments</code></td><td>Student-course access records</td><td>Links student (Clerk ID) to course; includes Stripe payment ref</td></tr>
           <tr><td><code>progress</code></td><td>Per-module completion tracking</td><td>Links enrollment to content modules</td></tr>
@@ -498,7 +498,7 @@
       <p>
         <strong>Clerk</strong> manages all student identity — registration, login, social OAuth
         (Google, Apple), MFA, and session management. It is <strong>completely separate</strong>
-        from the Provider Hub's Supabase Auth. Auth is enforced at three independent layers:
+        from the Marketing Hub's Supabase Auth. Auth is enforced at three independent layers:
       </p>
 
       <ol>
@@ -518,7 +518,7 @@
           <tr><td><strong>GraphQL security</strong></td><td>Depth limiting (max 6), disabled introspection in prod, no batching, masked errors</td></tr>
           <tr><td><strong>Rate limiting</strong></td><td>Upstash sliding window: 100 req/60s (anonymous), 200 (authenticated), 20 (mutations), 5 (checkout)</td></tr>
           <tr><td><strong>Payment (PCI)</strong></td><td>Stripe Checkout (hosted) — card data never touches our servers. PCI DSS SAQ-A</td></tr>
-          <tr><td><strong>Webhooks</strong></td><td>HMAC-SHA256 signature verification on all inbound webhooks (Stripe, Clerk, Provider Hub) with timing-safe comparison</td></tr>
+          <tr><td><strong>Webhooks</strong></td><td>HMAC-SHA256 signature verification on all inbound webhooks (Stripe, Clerk, Marketing Hub) with timing-safe comparison</td></tr>
         </tbody>
       </table>
     </section>
@@ -616,7 +616,7 @@
           <tr><th>Decision</th><th>Trade-off Accepted</th></tr>
         </thead>
         <tbody>
-          <tr><td><strong>Separate system from Provider Hub</strong></td><td>Data duplication (catalog mirror) for independent deployability and scaling</td></tr>
+          <tr><td><strong>Separate system from Marketing Hub</strong></td><td>Data duplication (catalog mirror) for independent deployability and scaling</td></tr>
           <tr><td><strong>Webhook sync (not API polling)</strong></td><td>Eventual consistency (~seconds) for decoupled systems and no polling overhead</td></tr>
           <tr><td><strong>GraphQL over REST</strong></td><td>Schema complexity for flexible queries, reduced over-fetching, and type-safe codegen</td></tr>
           <tr><td><strong>ISR over full SSR for catalog</strong></td><td>Up to 60s staleness for near-zero server cost and global sub-100ms loads</td></tr>
