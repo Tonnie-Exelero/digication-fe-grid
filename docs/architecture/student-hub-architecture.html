@@ -320,12 +320,12 @@
         <strong>courses and skills marketplace</strong> — a platform where students discover, purchase,
         and consume short-form upskilling courses (ranging from a few hours to a few weeks). Think of it
         as a purpose-built Udemy-style marketplace, tightly integrated with our existing
-        <strong>Provider Marketing Hub</strong> where learning institutions already publish and manage
+        <strong>Marketing Hub</strong> where learning institutions already publish and manage
         their course catalogs.
       </p>
 
       <p>
-        While the Provider Marketing Hub serves hundreds to a few thousand institutional users and is
+        While the Marketing Hub serves hundreds to a few thousand institutional users and is
         built on <strong>React, TypeScript, GraphQL, and Supabase</strong>, the Student Hub must be
         architected for a fundamentally different scale: <strong>millions of concurrent student users</strong>.
         This difference in scale — along with different usage patterns (high-read catalog browsing,
@@ -350,7 +350,7 @@
       </ul>
 
       <div class="callout callout-info">
-        <div class="callout-title">Relationship to Provider Marketing Hub</div>
+        <div class="callout-title">Relationship to Marketing Hub</div>
         <p style="margin-bottom:0;">
           The Student Hub is a <strong>consumer</strong> of course data published through the Provider
           Marketing Hub. Providers continue to manage courses, pricing, and content through their
@@ -621,7 +621,7 @@
         <div class="callout-title">Hard Constraints</div>
         <ul style="margin-bottom:0;">
           <li>
-            <strong>Course data lives in Supabase</strong> — The Provider Marketing Hub stores all course
+            <strong>Course data lives in Supabase</strong> — The Marketing Hub stores all course
             metadata, content, and pricing in a Supabase PostgreSQL instance. The Student Hub must
             read from this source of truth. It cannot modify provider-side data.
           </li>
@@ -770,7 +770,7 @@
  │   Updates: PostgreSQL (catalog mirror) + Meilisearch (search index) + Redis (cache bust).   │
  │                                                                                              │
  │   ┌──────────────────────────────────────────────────────────────────────────┐               │
- │   │              Read-only connection to Provider Marketing Hub             │               │
+ │   │              Read-only connection to Marketing Hub             │               │
  │   └──────────────────────────────────┬───────────────────────────────────────┘               │
  │                                      │                                                       │
  │                                      ▼                                                       │
