@@ -4071,7 +4071,783 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 9–12: Placeholder for iterative dev  -->
+    <!-- SECTION 9: Security                           -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s9">
+      <h2><span class="section-num">09</span> Security</h2>
+
+      <p>
+        Security in the Student Hub is designed around <strong>defense in depth</strong> — no single
+        layer is solely responsible for protecting the system. Authentication (Section 8) forms the
+        identity layer; this section covers everything else: transport security, input validation,
+        injection prevention, rate limiting, payment security, data privacy, and the overall threat model.
+      </p>
+
+      <!-- 9.1 Threat Model -->
+      <h3><span class="subsection-num">9.1</span> Threat Model</h3>
+
+      <p>
+        The Student Hub is a <strong>public-facing marketplace</strong> that handles user credentials,
+        payment flows, and user-generated content (reviews). This threat profile requires defending
+        against both automated and targeted attacks.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Threat</th>
+            <th>Attack Vector</th>
+            <th>Impact</th>
+            <th>Mitigation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Credential stuffing</strong></td>
+            <td>Automated login attempts with breached credentials</td>
+            <td>Account takeover → fraudulent purchases</td>
+            <td>Clerk's built-in bot detection, rate limiting, MFA; Upstash rate limit on /api/graphql</td>
+          </tr>
+          <tr>
+            <td><strong>XSS (Cross-Site Scripting)</strong></td>
+            <td>Malicious scripts injected via reviews, course descriptions</td>
+            <td>Session theft, phishing, data exfiltration</td>
+            <td>React's automatic escaping, CSP headers, DOMPurify for rich text, httpOnly cookies</td>
+          </tr>
+          <tr>
+            <td><strong>CSRF (Cross-Site Request Forgery)</strong></td>
+            <td>Forged requests from malicious sites</td>
+            <td>Unauthorized purchases, profile changes</td>
+            <td>SameSite=Lax cookies, Clerk's CSRF token in session, origin header validation</td>
+          </tr>
+          <tr>
+            <td><strong>SQL injection</strong></td>
+            <td>Malicious input in search queries, filters</td>
+            <td>Data breach, data manipulation</td>
+            <td>Drizzle ORM (parameterized queries only), Zod input validation at GraphQL boundary</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL abuse</strong></td>
+            <td>Deeply nested queries, batch attacks, introspection mining</td>
+            <td>DoS via resource exhaustion, schema discovery</td>
+            <td>Query depth limiting, complexity analysis, disabled introspection in production</td>
+          </tr>
+          <tr>
+            <td><strong>Payment fraud</strong></td>
+            <td>Price manipulation, replay attacks on checkout</td>
+            <td>Revenue loss, chargebacks</td>
+            <td>Stripe Checkout (server-created sessions with price_id), webhook signature verification, idempotency keys</td>
+          </tr>
+          <tr>
+            <td><strong>Data scraping</strong></td>
+            <td>Automated crawling of course catalog and pricing</td>
+            <td>Competitive intelligence theft, server load</td>
+            <td>Rate limiting per IP, edge WAF rules, Vercel's bot protection</td>
+          </tr>
+          <tr>
+            <td><strong>Webhook spoofing</strong></td>
+            <td>Forged webhook calls from attackers impersonating Stripe/Clerk</td>
+            <td>Fake enrollments, phantom payments</td>
+            <td>HMAC-SHA256 signature verification on every webhook, timestamp replay protection</td>
+          </tr>
+          <tr>
+            <td><strong>IDOR (Insecure Direct Object Reference)</strong></td>
+            <td>Manipulated IDs in GraphQL queries to access other students' data</td>
+            <td>Privacy violation, data leakage</td>
+            <td>Service-layer ownership checks (<code>WHERE student_id = ctx.userId</code>), no sequential IDs (UUIDs)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 9.2 Transport Security -->
+      <h3><span class="subsection-num">9.2</span> Transport &amp; Header Security</h3>
+
+      <p>
+        All communication is encrypted in transit. Vercel enforces HTTPS on all deployments with
+        automatic TLS certificate provisioning. Beyond TLS, the Student Hub sets security headers
+        to defend against common browser-based attacks.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Security Headers — next.config.ts
+  ────────────────────────────────────
+
+  headers: async () =&gt; [{
+    source: '/(.*)',
+    headers: [
+      //  Content Security Policy
+      {
+        key: 'Content-Security-Policy',
+        value: [
+          "default-src 'self'",
+          "script-src 'self' 'unsafe-inline' https://clerk.com https://js.stripe.com",
+          "style-src 'self' 'unsafe-inline'",           // Required for CSS-in-JS
+          "img-src 'self' data: https://*.supabase.co https://img.clerk.com",
+          "font-src 'self'",
+          "connect-src 'self' https://api.clerk.com https://api.stripe.com",
+          "frame-src https://js.stripe.com https://clerk.com",
+          "object-src 'none'",
+          "base-uri 'self'",
+          "form-action 'self'",
+          "frame-ancestors 'none'",                     // Clickjacking protection
+        ].join('; '),
+      },
+
+      // Prevent MIME-type sniffing
+      { key: 'X-Content-Type-Options', value: 'nosniff' },
+
+      // Clickjacking protection (legacy browsers)
+      { key: 'X-Frame-Options', value: 'DENY' },
+
+      // Control Referer header leakage
+      { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+
+      // HSTS — enforce HTTPS for 1 year, include subdomains
+      { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
+
+      // Opt out of FLoC / Topics API tracking
+      { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+    ],
+  }],
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.1 — Security headers: CSP restricts resource loading, HSTS enforces TLS, X-Frame-Options prevents clickjacking</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Header</th>
+            <th>Purpose</th>
+            <th>Why This Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Content-Security-Policy</strong></td>
+            <td>Controls which resources the browser can load</td>
+            <td>Allows only self, Clerk (auth UI), and Stripe (checkout iframe). Blocks inline scripts except those required for Next.js hydration</td>
+          </tr>
+          <tr>
+            <td><strong>Strict-Transport-Security</strong></td>
+            <td>Forces HTTPS on all subsequent requests</td>
+            <td>1-year max-age ensures browsers never downgrade to HTTP; includeSubDomains covers CDN subdomains</td>
+          </tr>
+          <tr>
+            <td><strong>X-Content-Type-Options</strong></td>
+            <td>Prevents MIME-type sniffing</td>
+            <td><code>nosniff</code> forces browsers to respect declared Content-Type, preventing script injection via misinterpreted files</td>
+          </tr>
+          <tr>
+            <td><strong>X-Frame-Options</strong></td>
+            <td>Prevents clickjacking</td>
+            <td><code>DENY</code> — the Student Hub should never be embedded in an iframe (CSP frame-ancestors provides the same protection for modern browsers)</td>
+          </tr>
+          <tr>
+            <td><strong>Referrer-Policy</strong></td>
+            <td>Controls Referer header leakage</td>
+            <td><code>strict-origin-when-cross-origin</code> — sends origin (not full URL) to cross-origin requests, preventing query parameter leakage</td>
+          </tr>
+          <tr>
+            <td><strong>Permissions-Policy</strong></td>
+            <td>Restricts browser features</td>
+            <td>Disables camera, microphone, geolocation — the Student Hub doesn't need device APIs</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 9.3 Input Validation -->
+      <h3><span class="subsection-num">9.3</span> Input Validation &amp; Sanitization</h3>
+
+      <p>
+        All user input enters the system through the GraphQL API. The validation strategy uses
+        <strong>Zod schemas</strong> at the GraphQL boundary (via Pothos's validation plugin) to
+        reject malformed input before it reaches any business logic or database query.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Input Validation Pipeline
+  ──────────────────────────
+
+  User Input
+      │
+      ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 1: GraphQL Type System                           │
+  │  • Type checking (String, Int, ID, enums)               │
+  │  • Required vs. optional fields                         │
+  │  • Rejects structurally invalid queries before parsing  │
+  └──────────────────────┬──────────────────────────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 2: Zod Validation (Pothos plugin)                │
+  │  • String length limits (e.g., review body ≤ 2000 chars)│
+  │  • Regex patterns (e.g., slug format: [a-z0-9-]+)      │
+  │  • Number ranges (e.g., rating 1–5)                     │
+  │  • Custom refinements (e.g., no empty strings after     │
+  │    trimming, valid URL format for image uploads)        │
+  │  • Rejects with structured validation errors            │
+  └──────────────────────┬──────────────────────────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 3: Drizzle ORM (Parameterized Queries)           │
+  │  • All values bound via parameterized queries ($1, $2)  │
+  │  • SQL injection is structurally impossible              │
+  │  • No raw SQL strings with user input concatenation     │
+  └──────────────────────┬──────────────────────────────────┘
+                         │
+                         ▼
+  ┌─────────────────────────────────────────────────────────┐
+  │  Layer 4: Output Sanitization                           │
+  │  • React auto-escapes all rendered values (JSX)         │
+  │  • Rich text (course descriptions) passed through       │
+  │    DOMPurify before rendering                           │
+  │  • URLs validated against allowlist before rendering    │
+  │    as href attributes                                   │
+  └─────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.2 — Four-layer input validation: GraphQL types → Zod schemas → parameterized queries → output escaping</p>
+
+      <div class="diagram">
+        <pre>
+  Example: Review Submission Validation
+  ───────────────────────────────────────
+
+  // Pothos mutation with Zod validation
+  builder.mutationField('createReview', (t) =&gt;
+    t.field({
+      type: ReviewType,
+      authScopes: { $authenticated: true },
+      args: {
+        input: t.arg({
+          type: builder.inputType('CreateReviewInput', {
+            fields: (t) =&gt; ({
+              courseId: t.string({
+                validate: { schema: z.string().uuid() },
+              }),
+              rating: t.int({
+                validate: { schema: z.number().int().min(1).max(5) },
+              }),
+              title: t.string({
+                validate: {
+                  schema: z.string().trim().min(3).max(100),
+                },
+              }),
+              body: t.string({
+                validate: {
+                  schema: z.string().trim().min(10).max(2000),
+                },
+              }),
+            }),
+          }),
+        }),
+      },
+      resolve: async (_, { input }, ctx) =&gt; {
+        // input is fully validated here — safe to pass to service layer
+        return reviewService.create(ctx.userId, input);
+      },
+    }),
+  );
+
+  Invalid input response:
+  {
+    "errors": [{
+      "message": "Validation error",
+      "extensions": {
+        "code": "BAD_USER_INPUT",
+        "validationErrors": [
+          { "path": ["input", "rating"], "message": "Number must be ≤ 5" },
+          { "path": ["input", "body"], "message": "String must be ≥ 10 chars" }
+        ]
+      }
+    }]
+  }
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.3 — Zod validation at the GraphQL boundary: structured errors with field-level messages</p>
+
+      <!-- 9.4 GraphQL-Specific Security -->
+      <h3><span class="subsection-num">9.4</span> GraphQL-Specific Security</h3>
+
+      <p>
+        GraphQL's flexibility creates unique attack surfaces not present in REST APIs. The Student
+        Hub mitigates each with specific countermeasures.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Attack</th>
+            <th>Description</th>
+            <th>Mitigation</th>
+            <th>Configuration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Query depth attack</strong></td>
+            <td>Deeply nested queries (<code>course { provider { courses { reviews { ... } } } }</code>) cause exponential DB lookups</td>
+            <td>Yoga depth limiting plugin</td>
+            <td><code>maxDepth: 6</code> — sufficient for <code>course → reviews → author</code> (3 levels) with margin</td>
+          </tr>
+          <tr>
+            <td><strong>Query complexity attack</strong></td>
+            <td>Wide queries requesting many fields/connections</td>
+            <td>Yoga query complexity plugin</td>
+            <td><code>maxComplexity: 1000</code> — each field scores 1, connections score 10 × first/limit</td>
+          </tr>
+          <tr>
+            <td><strong>Batch attack</strong></td>
+            <td>Sending arrays of queries in a single HTTP request</td>
+            <td>Disable batching</td>
+            <td><code>batching: false</code> in Yoga config — each request = one operation</td>
+          </tr>
+          <tr>
+            <td><strong>Introspection mining</strong></td>
+            <td>Querying <code>__schema</code> to discover all types, fields, and mutations</td>
+            <td>Disable in production</td>
+            <td><code>introspection: process.env.NODE_ENV !== 'production'</code> — available only in dev</td>
+          </tr>
+          <tr>
+            <td><strong>Field suggestion leak</strong></td>
+            <td>Typo in field name → error message suggests valid fields</td>
+            <td>Suppress suggestions in production</td>
+            <td>Custom error formatter strips <code>Did you mean</code> messages in production</td>
+          </tr>
+          <tr>
+            <td><strong>Persisted queries (future)</strong></td>
+            <td>Only allow pre-registered query hashes</td>
+            <td>Automatic Persisted Queries (APQ)</td>
+            <td>Not enabled at launch — can be added when the schema stabilizes. APQ eliminates arbitrary query injection entirely</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  GraphQL Security Configuration — server/yoga.ts
+  ──────────────────────────────────────────────────
+
+  import { createYoga } from 'graphql-yoga';
+  import { useDepthLimit } from '@envelop/depth-limit';
+  import { useDisableIntrospection } from '@envelop/disable-introspection';
+
+  const yoga = createYoga({
+    schema,
+    batching: false,                    // No batch queries
+    plugins: [
+      useDepthLimit({ maxDepth: 6 }),   // Prevent nested query attacks
+      ...(process.env.NODE_ENV === 'production'
+        ? [useDisableIntrospection()]   // No schema discovery in prod
+        : []),
+    ],
+    maskedErrors: {
+      isDev: process.env.NODE_ENV !== 'production',
+    },
+  });
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.4 — GraphQL Yoga security plugins: depth limiting, introspection control, masked errors</p>
+
+      <!-- 9.5 Rate Limiting -->
+      <h3><span class="subsection-num">9.5</span> Rate Limiting</h3>
+
+      <p>
+        Rate limiting uses <strong>Upstash Redis</strong> with a sliding window algorithm. Limits
+        are enforced at the GraphQL API layer (as a Yoga plugin) and vary by authentication state
+        and operation type.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Scope</th>
+            <th>Limit</th>
+            <th>Window</th>
+            <th>Key</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Unauthenticated queries</strong></td>
+            <td>100 requests</td>
+            <td>60 seconds</td>
+            <td>IP address</td>
+            <td>Generous enough for catalog browsing; prevents scraping</td>
+          </tr>
+          <tr>
+            <td><strong>Authenticated queries</strong></td>
+            <td>200 requests</td>
+            <td>60 seconds</td>
+            <td>User ID</td>
+            <td>Higher limit for logged-in users; keyed by identity, not IP (handles shared networks)</td>
+          </tr>
+          <tr>
+            <td><strong>Mutations</strong></td>
+            <td>20 requests</td>
+            <td>60 seconds</td>
+            <td>User ID</td>
+            <td>Writes are expensive; prevents spam reviews, rapid enrollment attempts</td>
+          </tr>
+          <tr>
+            <td><strong>Checkout creation</strong></td>
+            <td>5 requests</td>
+            <td>60 seconds</td>
+            <td>User ID</td>
+            <td>Stripe session creation has cost; prevents abuse of payment flow</td>
+          </tr>
+          <tr>
+            <td><strong>Webhooks</strong></td>
+            <td>No limit</td>
+            <td>—</td>
+            <td>—</td>
+            <td>Stripe/Clerk control send rate; rejecting webhooks loses data. Signature verification prevents abuse</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Rate Limiting — Sliding Window with Upstash
+  ──────────────────────────────────────────────
+
+  import { Ratelimit } from '@upstash/ratelimit';
+  import { Redis } from '@upstash/redis';
+
+  const redis = Redis.fromEnv();
+
+  const rateLimiters = {
+    unauthQuery:  new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(100, '60s') }),
+    authQuery:    new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(200, '60s') }),
+    mutation:     new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(20, '60s') }),
+    checkout:     new Ratelimit({ redis, limiter: Ratelimit.slidingWindow(5, '60s') }),
+  };
+
+  // Yoga plugin — runs before resolver execution
+  function useRateLimit(): Plugin {
+    return {
+      onExecute({ args }) {
+        const ctx = args.contextValue;
+        const isMutation = args.document.definitions.some(
+          (d) =&gt; d.kind === 'OperationDefinition' &amp;&amp; d.operation === 'mutation'
+        );
+
+        const limiter = isMutation
+          ? rateLimiters.mutation
+          : ctx.userId
+            ? rateLimiters.authQuery
+            : rateLimiters.unauthQuery;
+
+        const key = ctx.userId ?? ctx.ip;
+        const { success, remaining, reset } = await limiter.limit(key);
+
+        if (!success) {
+          throw new GraphQLError('Rate limit exceeded', {
+            extensions: {
+              code: 'RATE_LIMITED',
+              retryAfter: Math.ceil((reset - Date.now()) / 1000),
+            },
+          });
+        }
+      },
+    };
+  }
+
+  Response headers on rate limit:
+    429 Too Many Requests
+    Retry-After: {seconds until window reset}
+    X-RateLimit-Remaining: 0
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.5 — Upstash rate limiting: sliding window per identity, tiered by operation type</p>
+
+      <!-- 9.6 Payment Security -->
+      <h3><span class="subsection-num">9.6</span> Payment Security (PCI Compliance)</h3>
+
+      <p>
+        The Student Hub achieves <strong>PCI DSS SAQ-A</strong> compliance — the lightest tier — by
+        ensuring that <strong>no payment card data ever touches our servers</strong>. All payment
+        processing happens in Stripe's PCI-certified infrastructure.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Payment Security Architecture
+  ───────────────────────────────
+
+  ┌────────────┐                    ┌────────────┐                    ┌────────────┐
+  │  Student   │   Click "Buy"     │  Student   │   Stripe Checkout  │            │
+  │  Browser   │──────────────────▶│  Hub API   │───────────────────▶│  Stripe    │
+  │            │                    │            │   (server-side)    │            │
+  │            │                    │  Creates   │                    │  Creates   │
+  │            │                    │  Checkout  │                    │  Session   │
+  │            │◀───────────────────│  Session   │◀───────────────────│  with      │
+  │            │   Redirect URL     │  (price_id,│   session_url     │  payment   │
+  │            │                    │   userId)  │                    │  page      │
+  │            │                    └────────────┘                    │            │
+  │            │                                                     │            │
+  │            │   Redirect to Stripe-hosted page                    │            │
+  │            │────────────────────────────────────────────────────▶│            │
+  │            │                                                     │  Card form │
+  │            │   Card details entered directly on stripe.com       │  on Stripe │
+  │            │   ───────────────────────────────────────────────── │  domain    │
+  │            │   Our servers NEVER see card numbers, CVVs, etc.   │            │
+  │            │                                                     │            │
+  │            │◀────────────────────────────────────────────────────│  Payment   │
+  │            │   Redirect to /checkout/success?session_id=...     │  processed │
+  └────────────┘                                                     └─────┬──────┘
+                                                                           │
+                    ┌────────────┐   checkout.session.completed            │
+                    │  Student   │◀────────────────────────────────────────┘
+                    │  Hub       │   (Webhook, HMAC-SHA256 signed)
+                    │  Webhook   │
+                    │  Handler   │   1. Verify signature
+                    │            │   2. Extract session_id, customer
+                    │            │   3. Idempotent enrollment creation
+                    │            │   4. Bust cache for course/catalog
+                    └────────────┘
+
+  PCI Compliance Scope:
+  ┌────────────────────────────────────────────────────────────────┐
+  │  What we handle:                                               │
+  │    ✓ Creating Checkout Sessions (price_id, not card data)      │
+  │    ✓ Verifying webhook signatures                              │
+  │    ✓ Storing enrollment records (not payment details)          │
+  │                                                                │
+  │  What Stripe handles (in their PCI Level 1 environment):      │
+  │    ✓ Card form rendering and submission                        │
+  │    ✓ Card number storage and tokenization                      │
+  │    ✓ Payment processing and 3D Secure                          │
+  │    ✓ Refund processing                                         │
+  │    ✓ PCI DSS Level 1 compliance (highest tier)                 │
+  │                                                                │
+  │  Result: Student Hub qualifies for SAQ-A (self-assessment      │
+  │          questionnaire, ~20 questions, no on-site audit)       │
+  └────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 9.6 — Payment flow: card data stays on Stripe's domain; our servers only handle session IDs and webhook events</p>
+
+      <!-- 9.7 Webhook Security -->
+      <h3><span class="subsection-num">9.7</span> Webhook Security</h3>
+
+      <p>
+        Webhooks are the primary ingress for external events (Stripe payments, Clerk user lifecycle,
+        Provider Hub content sync). Each webhook source uses cryptographic signature verification
+        to prevent spoofing.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Source</th>
+            <th>Signature Method</th>
+            <th>Verification</th>
+            <th>Replay Protection</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Stripe</strong></td>
+            <td>HMAC-SHA256 via <code>Stripe-Signature</code> header</td>
+            <td><code>stripe.webhooks.constructEvent(body, sig, secret)</code></td>
+            <td>Timestamp tolerance: 300s (5 min). Events older than 5 min are rejected</td>
+          </tr>
+          <tr>
+            <td><strong>Clerk</strong></td>
+            <td>Svix signatures (HMAC-SHA256) via <code>svix-id</code>, <code>svix-timestamp</code>, <code>svix-signature</code> headers</td>
+            <td><code>svix.verify(body, headers)</code></td>
+            <td>Message ID deduplication + timestamp tolerance. Svix retries with exponential backoff for 3 days</td>
+          </tr>
+          <tr>
+            <td><strong>Provider Hub</strong></td>
+            <td>HMAC-SHA256 with shared secret</td>
+            <td>Custom verification: <code>crypto.timingSafeEqual(computedSig, receivedSig)</code></td>
+            <td>Timestamp in payload, reject if &gt;5 min old. Nonce-based deduplication via Redis</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Timing-Safe Comparison</div>
+        <p style="margin-bottom:0;">
+          All signature comparisons use <code>crypto.timingSafeEqual()</code> (or the equivalent
+          in the Stripe/Svix SDKs) to prevent timing attacks. A naive <code>===</code> comparison
+          leaks information about the expected signature through response time differences, allowing
+          an attacker to brute-force the signature byte by byte.
+        </p>
+      </div>
+
+      <!-- 9.8 Data Privacy -->
+      <h3><span class="subsection-num">9.8</span> Data Privacy &amp; Minimization</h3>
+
+      <p>
+        The Student Hub collects the minimum data necessary to operate the marketplace. Student
+        identity is managed by Clerk (off-platform), and payment data is managed by Stripe
+        (off-platform). What remains in the Student Hub's database is limited to operational data.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Data Category</th>
+            <th>Stored Where</th>
+            <th>Retention</th>
+            <th>Access Control</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Credentials (passwords, tokens)</strong></td>
+            <td>Clerk (never in our DB)</td>
+            <td>Managed by Clerk</td>
+            <td>Never accessible to Student Hub application code</td>
+          </tr>
+          <tr>
+            <td><strong>Payment card data</strong></td>
+            <td>Stripe (never in our DB)</td>
+            <td>Managed by Stripe</td>
+            <td>Never touches our servers — Checkout Sessions use price_id, not card details</td>
+          </tr>
+          <tr>
+            <td><strong>Student email / name</strong></td>
+            <td>Clerk (source of truth); optionally cached in Neon</td>
+            <td>Until account deletion</td>
+            <td>Only accessible to the student themselves (via Clerk) and admin operations</td>
+          </tr>
+          <tr>
+            <td><strong>Enrollment records</strong></td>
+            <td>Neon Postgres</td>
+            <td>Indefinite (represents purchased access)</td>
+            <td>Student can view their own enrollments; no cross-student access</td>
+          </tr>
+          <tr>
+            <td><strong>Course progress</strong></td>
+            <td>Neon Postgres</td>
+            <td>Until account deletion</td>
+            <td>Student-only; aggregated anonymously for provider analytics</td>
+          </tr>
+          <tr>
+            <td><strong>Reviews</strong></td>
+            <td>Neon Postgres</td>
+            <td>Indefinite (public content); anonymized on account deletion</td>
+            <td>Public read; write/edit restricted to author</td>
+          </tr>
+          <tr>
+            <td><strong>Search queries</strong></td>
+            <td>Not stored (stateless search via Meilisearch)</td>
+            <td>None</td>
+            <td>No search history persisted</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Account Deletion</div>
+        <p style="margin-bottom:0;">
+          When a student deletes their account (via Clerk's <code>user.deleted</code> webhook),
+          the Student Hub: <strong>(1)</strong> soft-deletes enrollment records (preserving provider
+          revenue data), <strong>(2)</strong> anonymizes reviews (removes author identity, keeps
+          content for aggregate ratings), <strong>(3)</strong> deletes progress data, and
+          <strong>(4)</strong> removes cached profile data from Redis. Clerk handles the actual
+          identity deletion. This approach balances user privacy rights with business data integrity.
+        </p>
+      </div>
+
+      <!-- 9.9 OWASP Top 10 -->
+      <h3><span class="subsection-num">9.9</span> OWASP Top 10 Coverage</h3>
+
+      <p>
+        The following table maps the <strong>OWASP Top 10 (2021)</strong> to the Student Hub's
+        specific mitigations, demonstrating comprehensive coverage of the most critical web
+        application security risks.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>OWASP #</th>
+            <th>Risk</th>
+            <th>Student Hub Mitigation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>A01</strong></td>
+            <td>Broken Access Control</td>
+            <td>Edge middleware route protection (§8.4), Pothos auth scopes (§8.7), service-layer ownership checks, UUIDs (no guessable IDs)</td>
+          </tr>
+          <tr>
+            <td><strong>A02</strong></td>
+            <td>Cryptographic Failures</td>
+            <td>TLS everywhere (Vercel enforced), HSTS header, httpOnly/Secure cookies, no sensitive data stored in plaintext (passwords in Clerk, cards in Stripe)</td>
+          </tr>
+          <tr>
+            <td><strong>A03</strong></td>
+            <td>Injection</td>
+            <td>Drizzle ORM (parameterized queries), Zod input validation at GraphQL boundary (§9.3), React auto-escaping, DOMPurify for rich text</td>
+          </tr>
+          <tr>
+            <td><strong>A04</strong></td>
+            <td>Insecure Design</td>
+            <td>Threat model (§9.1), defense in depth (3 auth layers), payment data never touches servers, principle of least privilege in data access</td>
+          </tr>
+          <tr>
+            <td><strong>A05</strong></td>
+            <td>Security Misconfiguration</td>
+            <td>Security headers (§9.2), introspection disabled in production, error masking, no default credentials (all secrets in env vars)</td>
+          </tr>
+          <tr>
+            <td><strong>A06</strong></td>
+            <td>Vulnerable Components</td>
+            <td>Dependabot / Renovate for dependency updates, npm audit in CI pipeline, minimal dependency surface (managed services over libraries)</td>
+          </tr>
+          <tr>
+            <td><strong>A07</strong></td>
+            <td>Auth Failures</td>
+            <td>Clerk handles auth entirely — MFA, brute-force protection, session management, credential storage. No custom auth code to get wrong</td>
+          </tr>
+          <tr>
+            <td><strong>A08</strong></td>
+            <td>Software/Data Integrity</td>
+            <td>HMAC-SHA256 webhook verification (§9.7), Stripe Checkout sessions created server-side (price cannot be tampered client-side), CI/CD integrity via Vercel</td>
+          </tr>
+          <tr>
+            <td><strong>A09</strong></td>
+            <td>Logging &amp; Monitoring</td>
+            <td>Structured logging via Pino, error tracking via Sentry, rate limit violations logged, webhook failures logged with retry metadata</td>
+          </tr>
+          <tr>
+            <td><strong>A10</strong></td>
+            <td>SSRF</td>
+            <td>No user-controlled URL fetching — the Student Hub does not proxy external requests. Image URLs are validated against an allowlist before rendering</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Security Philosophy</div>
+        <p style="margin-bottom:0;">
+          The Student Hub's security posture is built on <strong>three principles</strong>:
+          <strong>(1) Externalize sensitive operations</strong> — auth lives in Clerk, payments live
+          in Stripe, neither credentials nor card data ever touches our database.
+          <strong>(2) Validate at the boundary</strong> — all input is validated with Zod at the
+          GraphQL layer before reaching business logic; all output is escaped by React.
+          <strong>(3) Assume breach</strong> — even if one layer fails (e.g., edge cache bypass),
+          the next layer (Pothos auth scopes, service-layer ownership checks) independently enforces
+          security. No single point of failure.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 10–12: Placeholder for iterative dev -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
