@@ -680,7 +680,438 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 3–12: Placeholder for iterative dev  -->
+    <!-- SECTION 3: High-Level Architecture            -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s3">
+      <h2><span class="section-num">03</span> High-Level Architecture</h2>
+
+      <p>
+        The Student Hub follows a <strong>layered, edge-first architecture</strong> with clear separation
+        between the public-facing frontend, a backend-for-frontend (BFF) API layer, domain-specific
+        backend services, and data stores. Each layer can scale, deploy, and fail independently.
+      </p>
+
+      <h3><span class="subsection-num">3.1</span> System Architecture Overview</h3>
+
+      <div class="diagram">
+        <pre>
+ ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                                    EDGE / CDN LAYER                                         │
+ │                              (Vercel Edge Network / Cloudflare)                             │
+ │                                                                                              │
+ │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐                    │
+ │   │  Static      │  │  Edge        │  │  Image       │  │  DDoS /      │                    │
+ │   │  Assets      │  │  Middleware   │  │  Optim.      │  │  WAF         │                    │
+ │   │  (ISR/SSG)   │  │  (Auth/Geo)  │  │  (next/image)│  │  Rate Limit  │                    │
+ │   └──────────────┘  └──────────────┘  └──────────────┘  └──────────────┘                    │
+ └─────────────────────────────────────────┬────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                               FRONTEND (Next.js 15 App Router)                              │
+ │                                                                                              │
+ │   ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐              │
+ │   │  SSG Pages           │  │  SSR Pages           │  │  Client Components   │              │
+ │   │                      │  │                      │  │                      │              │
+ │   │  • Landing page      │  │  • Student dashboard │  │  • Course player     │              │
+ │   │  • Course catalog    │  │  • Checkout flow     │  │  • Quiz engine       │              │
+ │   │  • Course detail     │  │  • Enrollment mgmt   │  │  • Code playground   │              │
+ │   │  • Category pages    │  │  • Profile settings  │  │  • Search typeahead  │              │
+ │   │  • Provider profiles │  │  • Purchase history  │  │  • Progress tracker  │              │
+ │   └──────────────────────┘  └──────────────────────┘  └──────────────────────┘              │
+ │                                                                                              │
+ │   React Server Components  ·  TanStack Query  ·  Zustand  ·  Tailwind CSS  ·  shadcn/ui    │
+ └─────────────────────────────────────────┬────────────────────────────────────────────────────┘
+                                           │  tRPC (end-to-end type-safe calls)
+                                           ▼
+ ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                            BFF / API LAYER (Next.js API Routes + tRPC)                      │
+ │                                                                                              │
+ │   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐               │
+ │   │  Catalog      │  │  Enrollment   │  │  Payment      │  │  Notification │               │
+ │   │  Router       │  │  Router       │  │  Router       │  │  Router       │               │
+ │   │               │  │               │  │               │  │               │               │
+ │   │  • list       │  │  • enroll     │  │  • create     │  │  • list       │               │
+ │   │  • detail     │  │  • progress   │  │    session    │  │  • markRead   │               │
+ │   │  • search     │  │  • complete   │  │  • webhook    │  │  • prefs      │               │
+ │   │  • recommend  │  │  • certify    │  │  • history    │  │               │               │
+ │   └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘               │
+ │           │                  │                   │                  │                        │
+ │   ┌───────┴──────────────────┴───────────────────┴──────────────────┴───────┐               │
+ │   │                         Shared Middleware                               │               │
+ │   │     Auth verify  ·  Rate limit  ·  Validation (Zod)  ·  Logging        │               │
+ │   └────────────────────────────────────────────────────────────────────────┘               │
+ └─────────────────────────────────────────┬────────────────────────────────────────────────────┘
+                                           │
+                      ┌────────────────────┼────────────────────┐
+                      ▼                    ▼                    ▼
+ ┌─────────────────────────┐ ┌──────────────────────┐ ┌─────────────────────────┐
+ │   STUDENT DATABASE      │ │   CACHE LAYER        │ │   SEARCH ENGINE         │
+ │   (PostgreSQL / Neon)   │ │   (Redis / Upstash)  │ │   (Meilisearch)         │
+ │                         │ │                      │ │                         │
+ │  • students             │ │  • Session store     │ │  • Course index         │
+ │  • enrollments          │ │  • Catalog cache     │ │  • Full-text search     │
+ │  • progress             │ │  • Rate limit        │ │  • Typo tolerance       │
+ │  • transactions         │ │    counters          │ │  • Faceted filtering    │
+ │  • reviews              │ │  • Search cache      │ │  • Instant results      │
+ │  • notifications        │ │                      │ │                         │
+ │                         │ │  TTL: 60s catalog    │ │  Synced from Supabase   │
+ │  ORM: Drizzle           │ │  TTL: 5m search      │ │  via Course Sync worker │
+ └─────────────────────────┘ └──────────────────────┘ └─────────────────────────┘
+                                                                  ▲
+                                                                  │  Sync
+                      ┌───────────────────────────────────────────┘
+                      │
+ ┌────────────────────┴─────────────────────────────────────────────────────────────────────────┐
+ │                              COURSE SYNC SERVICE (Background Worker)                        │
+ │                                                                                              │
+ │   Polls or listens to Supabase Realtime for course changes.                                 │
+ │   Transforms provider-side schema → Student Hub schema.                                     │
+ │   Updates: PostgreSQL (catalog mirror) + Meilisearch (search index) + Redis (cache bust).   │
+ │                                                                                              │
+ │   ┌──────────────────────────────────────────────────────────────────────────┐               │
+ │   │              Read-only connection to Provider Marketing Hub             │               │
+ │   └──────────────────────────────────┬───────────────────────────────────────┘               │
+ │                                      │                                                       │
+ │                                      ▼                                                       │
+ │                    ┌──────────────────────────────────┐                                      │
+ │                    │   SUPABASE (Provider Hub DB)      │                                      │
+ │                    │                                  │                                      │
+ │                    │   • courses                      │                                      │
+ │                    │   • modules / lessons            │                                      │
+ │                    │   • pricing                      │                                      │
+ │                    │   • provider profiles            │                                      │
+ │                    │   • content assets               │                                      │
+ │                    └──────────────────────────────────┘                                      │
+ └──────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                      ┌──────────────────────────────────┐
+                      │   EXTERNAL SERVICES              │
+                      │                                  │
+                      │   • Stripe  (payments)           │
+                      │   • Clerk   (authentication)     │
+                      │   • Resend  (transactional email)│
+                      │   • Sentry  (error tracking)     │
+                      │   • Vercel  (hosting + edge)     │
+                      └──────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 3.1 — Full system architecture from edge to data stores, showing the separation between Student Hub and Provider Hub</p>
+
+      <h3><span class="subsection-num">3.2</span> Architectural Principles</h3>
+
+      <p>
+        Every decision in this architecture traces back to five core principles:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Principle</th>
+            <th>What It Means</th>
+            <th>How It Shows Up</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Edge-First</strong></td>
+            <td>
+              Serve as much as possible from CDN edge nodes closest to the user.
+              Minimize round trips to origin servers.
+            </td>
+            <td>
+              SSG for catalog pages, edge middleware for auth checks, Upstash Redis
+              (edge-compatible), image optimization at the edge.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Read/Write Separation</strong></td>
+            <td>
+              The read path (catalog browsing, search) and write path (enrollment,
+              payment, progress) are architecturally distinct and scale independently.
+            </td>
+            <td>
+              Catalog reads hit cached SSG pages + Meilisearch. Writes go through
+              tRPC to PostgreSQL. A traffic spike on the catalog never degrades
+              checkout availability.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Provider Isolation</strong></td>
+            <td>
+              The Student Hub never writes to the Provider Hub's Supabase. Data
+              flows one direction: Provider → Student Hub via a sync service.
+            </td>
+            <td>
+              Course Sync Service reads from Supabase (Realtime subscriptions or
+              polling). If the Provider Hub goes down, the Student Hub continues
+              serving from its local catalog mirror.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Zero PCI Scope</strong></td>
+            <td>
+              No credit card numbers, CVVs, or sensitive payment data ever touch our
+              servers, databases, or logs.
+            </td>
+            <td>
+              Stripe Checkout / Stripe Elements handle all card input client-side.
+              Our backend only receives Stripe tokens and webhook events. This
+              qualifies us for PCI SAQ-A (the lightest compliance tier).
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Type-Safe Boundaries</strong></td>
+            <td>
+              Every boundary between systems is typed: frontend ↔ API, API ↔ database,
+              API ↔ external services. No <code>any</code>, no untyped JSON blobs.
+            </td>
+            <td>
+              tRPC provides compile-time type safety from React component to API handler.
+              Drizzle ORM provides typed database queries. Zod schemas validate all
+              external input at runtime.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3><span class="subsection-num">3.3</span> Data Flow Patterns</h3>
+
+      <p>
+        The system has three distinct data flow patterns, each optimized for its access characteristics:
+      </p>
+
+      <h3 style="font-size: 1.1rem; margin-top: 24px;"><strong>Pattern A:</strong> Catalog Browsing (High-volume reads, anonymous)</h3>
+      <div class="diagram">
+        <pre>
+  Student Browser                Edge CDN                    Next.js (SSG/ISR)
+       │                           │                              │
+       │  GET /courses/react-101   │                              │
+       │ ─────────────────────────▶│                              │
+       │                           │                              │
+       │                           │──── Cache HIT? ────▶ YES ───▶│ Return cached HTML
+       │◀──────────────────────────│◀──────────────── (< 50ms) ──│
+       │   Cached HTML + assets    │                              │
+       │                           │                              │
+       │                           │──── Cache MISS? ───▶ NO ────▶│ ISR: Regenerate page
+       │                           │                              │ ─▶ tRPC: catalog.detail
+       │                           │                              │ ─▶ Redis cache / PostgreSQL
+       │◀──────────────────────────│◀─────────────────────────────│ Return fresh HTML
+       │   Fresh HTML (cached 60s) │   Cache + serve              │ (revalidate: 60)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 3.2 — Catalog read path: edge-cached, ISR-backed, sub-100ms for cache hits</p>
+
+      <h3 style="font-size: 1.1rem; margin-top: 24px;"><strong>Pattern B:</strong> Course Purchase (Low-volume writes, authenticated, critical)</h3>
+      <div class="diagram">
+        <pre>
+  Student Browser         Next.js SSR          tRPC API           Stripe            PostgreSQL
+       │                      │                    │                 │                   │
+       │  Click "Buy Now"     │                    │                 │                   │
+       │ ────────────────────▶│                    │                 │                   │
+       │                      │  payment.create    │                 │                   │
+       │                      │───────────────────▶│                 │                   │
+       │                      │                    │  Create Session │                   │
+       │                      │                    │────────────────▶│                   │
+       │                      │                    │  session_url    │                   │
+       │                      │◀───────────────────│◀────────────────│                   │
+       │  Redirect to Stripe  │                    │                 │                   │
+       │◀─────────────────────│                    │                 │                   │
+       │                      │                    │                 │                   │
+       │  ··· Student pays on Stripe hosted page ···                │                   │
+       │                      │                    │                 │                   │
+       │                      │                    │  Webhook:       │                   │
+       │                      │                    │  payment_intent │                   │
+       │                      │                    │  .succeeded     │                   │
+       │                      │                    │◀────────────────│                   │
+       │                      │                    │                 │                   │
+       │                      │                    │  Verify sig + idempotency key      │
+       │                      │                    │───────────────────────────────────▶│
+       │                      │                    │  INSERT enrollment + transaction   │
+       │                      │                    │◀───────────────────────────────────│
+       │                      │                    │                 │                   │
+       │  Redirect: /success  │                    │  Bust cache     │                   │
+       │◀─────────────────────│◀───────────────────│  (Redis + ISR)  │                   │
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 3.3 — Purchase flow: Stripe handles all card data, webhook confirms enrollment, idempotency prevents double-charges</p>
+
+      <h3 style="font-size: 1.1rem; margin-top: 24px;"><strong>Pattern C:</strong> Course Sync (Background, Provider → Student Hub)</h3>
+      <div class="diagram">
+        <pre>
+  Supabase (Provider Hub)          Course Sync Service              Student Hub Stores
+       │                                  │                              │
+       │  Realtime: course updated        │                              │
+       │ ────────────────────────────────▶│                              │
+       │                                  │                              │
+       │                                  │  1. Fetch full course data   │
+       │◀─────────────────────────────────│     (Supabase client)        │
+       │  Course + modules + pricing      │                              │
+       │ ────────────────────────────────▶│                              │
+       │                                  │                              │
+       │                                  │  2. Transform schema         │
+       │                                  │     provider → student       │
+       │                                  │                              │
+       │                                  │  3. Upsert to PostgreSQL ───▶│  catalog_courses table
+       │                                  │  4. Update Meilisearch ─────▶│  search index
+       │                                  │  5. Bust Redis cache ───────▶│  invalidate keys
+       │                                  │                              │
+       │                                  │  Idempotent: uses course     │
+       │                                  │  version/updated_at as key   │
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 3.4 — Course sync: Supabase Realtime triggers one-way data flow into Student Hub's local stores</p>
+
+      <h3><span class="subsection-num">3.4</span> Technology Stack Summary</h3>
+
+      <p>
+        The following technologies form the complete stack. Each is analyzed in detail in subsequent
+        sections, with selection rationale and alternatives considered.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Technology</th>
+            <th>Role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Frontend Framework</strong></td>
+            <td><span class="tech-badge">Next.js 15</span> <span class="tech-badge">React 19</span></td>
+            <td>SSR/SSG/ISR hybrid rendering, React Server Components, App Router</td>
+          </tr>
+          <tr>
+            <td><strong>UI Components</strong></td>
+            <td><span class="tech-badge">shadcn/ui</span> <span class="tech-badge">Radix</span> <span class="tech-badge">Tailwind v4</span></td>
+            <td>Accessible, composable component library with utility-first styling</td>
+          </tr>
+          <tr>
+            <td><strong>State Management</strong></td>
+            <td><span class="tech-badge">TanStack Query</span> <span class="tech-badge">Zustand</span></td>
+            <td>Server state caching/sync (TanStack) + minimal client state (Zustand)</td>
+          </tr>
+          <tr>
+            <td><strong>API Layer</strong></td>
+            <td><span class="tech-badge">tRPC v11</span> <span class="tech-badge">Zod</span></td>
+            <td>End-to-end type-safe API with runtime validation</td>
+          </tr>
+          <tr>
+            <td><strong>Student Database</strong></td>
+            <td><span class="tech-badge">PostgreSQL</span> <span class="tech-badge">Neon</span> <span class="tech-badge">Drizzle ORM</span></td>
+            <td>Serverless Postgres with typed ORM for student data</td>
+          </tr>
+          <tr>
+            <td><strong>Course Data (source)</strong></td>
+            <td><span class="tech-badge">Supabase</span></td>
+            <td>Existing provider-side database — read-only access via sync service</td>
+          </tr>
+          <tr>
+            <td><strong>Search</strong></td>
+            <td><span class="tech-badge">Meilisearch</span></td>
+            <td>Sub-50ms full-text search with typo tolerance and faceted filtering</td>
+          </tr>
+          <tr>
+            <td><strong>Cache</strong></td>
+            <td><span class="tech-badge">Upstash Redis</span></td>
+            <td>Edge-compatible Redis for session, cache, and rate limiting</td>
+          </tr>
+          <tr>
+            <td><strong>Authentication</strong></td>
+            <td><span class="tech-badge">Clerk</span></td>
+            <td>Managed auth with social login, MFA, session management</td>
+          </tr>
+          <tr>
+            <td><strong>Payments</strong></td>
+            <td><span class="tech-badge">Stripe</span></td>
+            <td>Checkout sessions, webhook processing, promo codes</td>
+          </tr>
+          <tr>
+            <td><strong>Email</strong></td>
+            <td><span class="tech-badge">Resend</span></td>
+            <td>Transactional emails (confirmations, receipts, notifications)</td>
+          </tr>
+          <tr>
+            <td><strong>Hosting</strong></td>
+            <td><span class="tech-badge">Vercel</span></td>
+            <td>Edge network, serverless functions, preview deploys, ISR</td>
+          </tr>
+          <tr>
+            <td><strong>Monitoring</strong></td>
+            <td><span class="tech-badge">Sentry</span> <span class="tech-badge">Vercel Analytics</span></td>
+            <td>Error tracking, performance monitoring, Core Web Vitals</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Why Not SurrealDB or NATS?</div>
+        <p>
+          Both were considered during early discovery. <strong>SurrealDB</strong> is an innovative
+          multi-model database, but for a production system handling financial transactions at scale,
+          PostgreSQL's 30+ years of battle-testing, ACID guarantees, mature tooling ecosystem (Drizzle,
+          pgAdmin, connection pooling via PgBouncer/Neon), and vast hiring pool make it the lower-risk
+          choice. SurrealDB's graph and document capabilities aren't needed for the Student Hub's
+          predominantly relational data model (students → enrollments → courses → progress).
+        </p>
+        <p style="margin-bottom:0;">
+          <strong>NATS/Jetstream</strong> excels at high-throughput, low-latency messaging between
+          microservices. However, the Student Hub's real-time needs are limited to notifications
+          (not chat or collaboration). For this scope, Upstash Redis pub/sub or even simple
+          database polling is sufficient and avoids introducing an additional infrastructure
+          component to operate, monitor, and scale. If real-time requirements expand (e.g., live
+          sessions, collaborative features), NATS can be introduced as an additive layer without
+          rearchitecting.
+        </p>
+      </div>
+
+      <h3><span class="subsection-num">3.5</span> Deployment Topology</h3>
+
+      <div class="diagram">
+        <pre>
+                              ┌─────────────────────────────────────────────────┐
+                              │              VERCEL PLATFORM                    │
+                              │                                                 │
+  Student                     │  ┌──────────┐   ┌──────────┐   ┌──────────┐   │
+  Browser ──── HTTPS ────────▶│  │  Edge    │   │ Serverless│   │  ISR     │   │
+                              │  │  Network │──▶│ Functions │──▶│  Cache   │   │
+                              │  │  (CDN)   │   │ (Node 20) │   │  Store   │   │
+                              │  └──────────┘   └─────┬─────┘   └──────────┘   │
+                              │                       │                         │
+                              └───────────────────────┼─────────────────────────┘
+                                                      │
+                         ┌──────────────┬─────────────┼──────────────┬──────────────┐
+                         │              │             │              │              │
+                         ▼              ▼             ▼              ▼              ▼
+                    ┌─────────┐   ┌──────────┐  ┌─────────┐   ┌─────────┐   ┌──────────┐
+                    │  Neon   │   │ Upstash  │  │  Meili- │   │  Clerk  │   │  Stripe  │
+                    │ Postgres│   │  Redis   │  │  search │   │  Auth   │   │ Payments │
+                    │ (DB)    │   │ (Cache)  │  │ (Search)│   │         │   │          │
+                    └─────────┘   └──────────┘  └─────────┘   └─────────┘   └──────────┘
+
+                    All managed services — zero server ops. Scales with demand.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 3.5 — Deployment topology: fully serverless, all managed services, no servers to patch or scale manually</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Operational Simplicity</div>
+        <p style="margin-bottom:0;">
+          Every component in the deployment topology is a managed service. There are no VMs to
+          patch, no containers to orchestrate, no databases to back up manually. This is a
+          deliberate trade-off: slightly higher per-request cost at scale in exchange for
+          <strong>zero ops overhead</strong> at launch. As the platform grows, specific components
+          (e.g., the database) can be migrated to self-managed infrastructure if cost optimization
+          demands it — but starting managed means the team ships features, not infrastructure.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 4–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
