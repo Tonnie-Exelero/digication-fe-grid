@@ -1111,7 +1111,668 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 4–12: Placeholder for iterative dev  -->
+    <!-- SECTION 4: Frontend Architecture              -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s4">
+      <h2><span class="section-num">04</span> Frontend Architecture</h2>
+
+      <p>
+        The frontend is the student's entire experience. Every decision here — framework, rendering
+        strategy, component design, state management — directly impacts the metrics that matter most:
+        <strong>time to first meaningful paint</strong>, <strong>interaction responsiveness</strong>,
+        and <strong>conversion rate</strong> on course purchases. This section details the architecture
+        from framework selection down to the component tree.
+      </p>
+
+      <!-- 4.1 Framework Selection -->
+      <h3><span class="subsection-num">4.1</span> Framework: Next.js 15 + React 19</h3>
+
+      <p>
+        Next.js 15 with the App Router is the foundation of the Student Hub frontend. This is not a
+        default choice — it's a deliberate selection driven by four requirements that eliminate most
+        alternatives:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Requirement</th>
+            <th>Why It Matters</th>
+            <th>How Next.js 15 Delivers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>SEO for course pages</strong></td>
+            <td>Organic search is a primary acquisition channel; course detail pages must be fully indexable</td>
+            <td>Server-side rendering (SSR) and static generation (SSG) produce complete HTML at the edge</td>
+          </tr>
+          <tr>
+            <td><strong>Sub-second catalog loads</strong></td>
+            <td>Every 100ms of added latency reduces conversion by ~1%; the catalog is the top-of-funnel</td>
+            <td>ISR (Incremental Static Regeneration) serves stale-while-revalidate cached pages from the CDN</td>
+          </tr>
+          <tr>
+            <td><strong>Rich interactive player</strong></td>
+            <td>The content player (quizzes, code playgrounds, exercises) demands client-side interactivity</td>
+            <td>React Server Components stream the shell; client components hydrate only interactive islands</td>
+          </tr>
+          <tr>
+            <td><strong>Unified deployment</strong></td>
+            <td>Separate frontend/backend deploys add CI/CD complexity and version skew risk</td>
+            <td>API routes (tRPC) and frontend deploy as a single Vercel project — atomic deploys, zero skew</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Alternatives Considered</div>
+        <p>
+          <strong>Remix:</strong> Excellent data-loading primitives, but weaker ISR story and smaller
+          ecosystem for the component libraries we need (shadcn/ui is Next.js-native). Remix's loader
+          pattern is elegant but doesn't offer the same edge-caching granularity as Next.js ISR.
+        </p>
+        <p>
+          <strong>Astro:</strong> Best-in-class for content sites, but its island architecture adds
+          friction for a highly interactive app like the course player. The Student Hub isn't a blog —
+          it's a web application with document-like pages.
+        </p>
+        <p style="margin-bottom:0;">
+          <strong>SPA (Vite + React Router):</strong> Simplest DX, but sacrifices SSR/SSG entirely.
+          Course pages would be invisible to search engines without a separate prerendering solution,
+          and initial load times on mobile would suffer from full client-side rendering.
+        </p>
+      </div>
+
+      <!-- 4.2 Rendering Strategy -->
+      <h3><span class="subsection-num">4.2</span> Rendering Strategy: The Right Tool for Each Page</h3>
+
+      <p>
+        Not every page needs the same rendering strategy. The Student Hub uses a <strong>hybrid
+        approach</strong> — matching each route to the rendering mode that optimizes for its specific
+        access pattern, cacheability, and interactivity requirements.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Route</th>
+            <th>Strategy</th>
+            <th>Revalidation</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/</code> (Home)</td>
+            <td><span class="tech-badge">ISR</span></td>
+            <td>60 seconds</td>
+            <td>Featured courses change infrequently; ISR keeps it fast with near-real-time freshness</td>
+          </tr>
+          <tr>
+            <td><code>/courses</code> (Catalog)</td>
+            <td><span class="tech-badge">ISR</span></td>
+            <td>60 seconds</td>
+            <td>High traffic, mostly static listing; filters applied client-side via Meilisearch</td>
+          </tr>
+          <tr>
+            <td><code>/courses/[slug]</code></td>
+            <td><span class="tech-badge">ISR</span></td>
+            <td>60 seconds + on-demand</td>
+            <td>SEO-critical; pre-rendered at build for top courses, on-demand for long tail</td>
+          </tr>
+          <tr>
+            <td><code>/dashboard</code></td>
+            <td><span class="tech-badge">SSR</span></td>
+            <td>None (dynamic)</td>
+            <td>Personalized per-student; must reflect current enrollments and progress</td>
+          </tr>
+          <tr>
+            <td><code>/dashboard/courses/[id]/learn</code></td>
+            <td><span class="tech-badge">SSR + CSR</span></td>
+            <td>None (dynamic)</td>
+            <td>Shell is server-rendered; content player hydrates as interactive client component</td>
+          </tr>
+          <tr>
+            <td><code>/checkout/[courseId]</code></td>
+            <td><span class="tech-badge">SSR</span></td>
+            <td>None (dynamic)</td>
+            <td>Authenticated, session-dependent; must always reflect current pricing</td>
+          </tr>
+          <tr>
+            <td><code>/auth/*</code></td>
+            <td><span class="tech-badge">SSR</span></td>
+            <td>None (dynamic)</td>
+            <td>Clerk-managed auth pages with redirect logic; must be server-rendered for security</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  ┌─────────────────────────────────────────────────────────────────────────────────┐
+  │                        RENDERING DECISION TREE                                  │
+  │                                                                                 │
+  │  Is the page personalized (user-specific data)?                                │
+  │    ├── YES → Is it highly interactive (player, forms)?                          │
+  │    │           ├── YES → SSR shell + CSR islands  (/learn, /checkout)           │
+  │    │           └── NO  → SSR only  (/dashboard, /settings)                     │
+  │    └── NO  → Does it change more than once per minute?                         │
+  │               ├── YES → SSR with short cache headers                           │
+  │               └── NO  → ISR with 60s revalidation  (/, /courses, /courses/*)   │
+  └─────────────────────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.1 — Rendering decision tree: every route follows this logic to select its strategy</p>
+
+      <!-- 4.3 React Server Components -->
+      <h3><span class="subsection-num">4.3</span> React Server Components: Server-First by Default</h3>
+
+      <p>
+        With the App Router, every component is a <strong>Server Component by default</strong>. This
+        is a fundamental shift: the majority of UI code never ships JavaScript to the browser. Only
+        components that need interactivity (event handlers, state, effects) are marked with
+        <code>'use client'</code> and hydrated on the client.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Course Detail Page — Component Boundary Map
+  ─────────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  CourseDetailPage (SERVER)                                      │
+  │  ┌────────────────────────┐  ┌──────────────────────────────┐  │
+  │  │ CourseHero (SERVER)    │  │ CourseSidebar (SERVER)       │  │
+  │  │  • title, image, desc  │  │  ┌────────────────────────┐  │  │
+  │  │  • provider badge      │  │  │ PriceCard (SERVER)     │  │  │
+  │  │  • category tags       │  │  │  • price, discount     │  │  │
+  │  └────────────────────────┘  │  │  ┌──────────────────┐  │  │  │
+  │  ┌────────────────────────┐  │  │  │ BuyButton        │  │  │  │
+  │  │ Syllabus (SERVER)      │  │  │  │ (CLIENT)         │  │  │  │
+  │  │  • module list         │  │  │  │  • onClick       │  │  │  │
+  │  │  • lesson previews     │  │  │  │  • loading state │  │  │  │
+  │  │  ┌──────────────────┐  │  │  │  └──────────────────┘  │  │  │
+  │  │  │ AccordionGroup   │  │  │  └────────────────────────┘  │  │
+  │  │  │ (CLIENT)         │  │  │  ┌────────────────────────┐  │  │
+  │  │  │  • expand/collapse│  │  │  │ ShareButton (CLIENT)  │  │  │
+  │  │  └──────────────────┘  │  │  │  • clipboard API       │  │  │
+  │  └────────────────────────┘  │  └────────────────────────┘  │  │
+  │  ┌────────────────────────┐  └──────────────────────────────┘  │
+  │  │ ReviewsList (SERVER)   │                                    │
+  │  │  • avg rating, count   │                                    │
+  │  │  ┌──────────────────┐  │                                    │
+  │  │  │ ReviewPagination │  │                                    │
+  │  │  │ (CLIENT)         │  │                                    │
+  │  │  │  • load more     │  │                                    │
+  │  │  └──────────────────┘  │                                    │
+  │  └────────────────────────┘                                    │
+  └─────────────────────────────────────────────────────────────────┘
+
+  SERVER = zero JS shipped to browser         CLIENT = hydrated, interactive
+  ~85% of this page is server-rendered         ~15% is client-side JavaScript
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.2 — Server/client component boundaries on a course detail page: the vast majority ships zero JS</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">The "Use Client" Budget</div>
+        <p style="margin-bottom:0;">
+          We enforce a simple rule: <strong>every <code>'use client'</code> directive must be justified
+          in a code comment</strong> explaining which browser API or interactive behavior requires it.
+          This prevents the common pitfall of marking entire subtrees as client components out of
+          convenience, which negates the bundle-size benefits of RSC. In code review, unjustified
+          <code>'use client'</code> directives are treated as bugs.
+        </p>
+      </div>
+
+      <!-- 4.4 UI Component System -->
+      <h3><span class="subsection-num">4.4</span> UI Component System: shadcn/ui + Radix + Tailwind v4</h3>
+
+      <p>
+        The component system is built on three layers, each serving a distinct role:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Layer</th>
+            <th>Technology</th>
+            <th>Responsibility</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Primitives</strong></td>
+            <td><span class="tech-badge">Radix UI</span></td>
+            <td>
+              Unstyled, accessible primitives (Dialog, Dropdown, Tabs, Accordion, Tooltip).
+              Handle keyboard navigation, focus management, ARIA attributes, and screen reader
+              announcements. We never build these from scratch.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Components</strong></td>
+            <td><span class="tech-badge">shadcn/ui</span></td>
+            <td>
+              Pre-composed, copy-paste components built on Radix. Lives in our codebase as
+              source files (not a node_module) — we own the code and customize freely. Includes
+              Button, Card, Input, Select, Table, Badge, Sheet, Command, and ~40 others.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Styling</strong></td>
+            <td><span class="tech-badge">Tailwind CSS v4</span></td>
+            <td>
+              Utility-first CSS with the new v4 engine: CSS-native configuration (no
+              <code>tailwind.config.js</code>), automatic content detection, and Lightning CSS
+              for sub-millisecond builds. Design tokens defined as CSS custom properties.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        This stack gives us <strong>accessible-by-default components</strong> that we fully own.
+        Unlike a pre-built design system (Material UI, Chakra), shadcn/ui components are source
+        code in our repo — there's no version lock-in, no fighting the library's opinions, and
+        no unused CSS from components we don't use.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Component Architecture — Layered Ownership
+  ────────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  Application Components (we build)                          │
+  │  CourseCard, SearchBar, ContentPlayer, ProgressRing, etc.   │
+  │──────────────────────────────────────────────────────────────│
+  │  shadcn/ui Components (we own, copied into repo)            │
+  │  Button, Card, Dialog, Input, Select, Tabs, Badge, etc.     │
+  │──────────────────────────────────────────────────────────────│
+  │  Radix Primitives (npm dependency)                          │
+  │  Accessible behaviors, keyboard nav, ARIA, focus trap       │
+  │──────────────────────────────────────────────────────────────│
+  │  Tailwind CSS v4 (utility layer)                            │
+  │  Design tokens, responsive utilities, dark mode, animations │
+  └──────────────────────────────────────────────────────────────┘
+
+  Each layer depends only on the one below it. Application
+  components never bypass shadcn/ui to use Radix directly
+  (unless building a net-new primitive not covered by shadcn).
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.3 — Component layer ownership: we own the top two layers entirely, depend on the bottom two as libraries</p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Why Not Material UI or Chakra?</div>
+        <p style="margin-bottom:0;">
+          Both are excellent libraries, but they ship as opinionated npm packages with their own
+          styling engines. This means: (1) bundle size includes unused components unless tree-shaking
+          is perfect, (2) customization requires fighting the library's theme system, and (3) version
+          upgrades can introduce breaking visual changes. With shadcn/ui, the components are <em>our
+          code</em> — we update them when we choose, style them with Tailwind (which we already use),
+          and never ship a single unused byte. The trade-off is slightly more initial setup, which
+          shadcn's CLI handles.
+        </p>
+      </div>
+
+      <!-- 4.5 State Management -->
+      <h3><span class="subsection-num">4.5</span> State Management: Server State vs. Client State</h3>
+
+      <p>
+        The most common mistake in React state management is treating everything as the same kind
+        of state. The Student Hub draws a hard line between <strong>server state</strong> (data that
+        lives in a database and is shared across users) and <strong>client state</strong> (UI-local
+        state like modals, filters, and form inputs).
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>State Type</th>
+            <th>Tool</th>
+            <th>Examples</th>
+            <th>Characteristics</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Server State</strong></td>
+            <td><span class="tech-badge">TanStack Query v5</span></td>
+            <td>Course catalog, enrollment list, progress data, reviews, user profile</td>
+            <td>Cached, stale-while-revalidate, background refetch, optimistic updates, pagination</td>
+          </tr>
+          <tr>
+            <td><strong>Client State</strong></td>
+            <td><span class="tech-badge">Zustand</span></td>
+            <td>Content player position, sidebar open/closed, active filters, toast queue</td>
+            <td>Synchronous, local-only, no persistence needed (or localStorage for preferences)</td>
+          </tr>
+          <tr>
+            <td><strong>URL State</strong></td>
+            <td><span class="tech-badge">nuqs</span></td>
+            <td>Search query, active filters, sort order, pagination page</td>
+            <td>Shareable, bookmarkable, SSR-compatible; URL is the source of truth</td>
+          </tr>
+          <tr>
+            <td><strong>Form State</strong></td>
+            <td><span class="tech-badge">React Hook Form</span> + <span class="tech-badge">Zod</span></td>
+            <td>Checkout form, review submission, profile edit, promo code input</td>
+            <td>Validation, dirty tracking, submission handling; Zod schemas shared with tRPC</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  State Flow — Course Catalog Page
+  ─────────────────────────────────
+
+  URL: /courses?q=react&category=frontend&sort=popular&page=2
+       ──────────────────────────────────────────────────────
+                              │
+                    ┌─────────▼─────────┐
+                    │   nuqs (URL state) │  ← shareable, bookmarkable
+                    │   q = "react"      │
+                    │   category = "fe"  │
+                    │   sort = "popular" │
+                    │   page = 2         │
+                    └─────────┬─────────┘
+                              │ feeds into
+                    ┌─────────▼──────────────┐
+                    │  TanStack Query         │  ← caches Meilisearch results
+                    │  queryKey: ['courses',  │
+                    │    {q, category, sort,  │
+                    │     page}]              │
+                    │  staleTime: 30s         │
+                    └─────────┬──────────────┘
+                              │ renders
+                    ┌─────────▼─────────┐
+                    │  CourseGrid        │  ← server component for shell,
+                    │  (12 course cards) │    client component for interaction
+                    └───────────────────┘
+
+  Zustand is NOT involved here — no duplicate state.
+  The URL is the single source of truth for filters.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.4 — State flow on the catalog page: URL drives queries, TanStack Query caches results, Zustand stays out of it</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Why Zustand Over Redux, Jotai, or Context?</div>
+        <p style="margin-bottom:0;">
+          <strong>Redux:</strong> Powerful but overkill — the Student Hub has very little global client
+          state (most state is server state managed by TanStack Query). Redux's boilerplate and
+          middleware system add complexity without proportional benefit.
+          <strong>Jotai:</strong> Atomic model is elegant but less intuitive for the team's existing
+          experience with flux-like patterns. Zustand offers a single-store model that's easier to
+          debug and reason about.
+          <strong>React Context:</strong> Fine for truly static values (theme, locale), but causes
+          unnecessary re-renders when used for frequently-changing state. Zustand's selector-based
+          subscriptions solve this natively.
+          Zustand is ~1KB gzipped, has zero boilerplate, and the entire store definition fits in
+          a single file. For the Student Hub's minimal client state needs, this is the right size.
+        </p>
+      </div>
+
+      <!-- 4.6 Content Player Architecture -->
+      <h3><span class="subsection-num">4.6</span> Content Player Architecture</h3>
+
+      <p>
+        The content player is the most complex frontend component — it's where students spend the
+        majority of their time. It must handle multiple content types (text, video, quizzes,
+        interactive exercises, code playgrounds), track progress in real-time, and provide a
+        seamless learning experience across devices.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Content Player — Component Architecture
+  ─────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  PlayerShell (SERVER — layout, course nav, breadcrumbs)                │
+  │                                                                         │
+  │  ┌───────────────────┐  ┌───────────────────────────────────────────┐  │
+  │  │ ModuleSidebar     │  │ ContentArea (CLIENT — 'use client')       │  │
+  │  │ (CLIENT)          │  │                                           │  │
+  │  │                   │  │  ┌─────────────────────────────────────┐  │  │
+  │  │ • Module list     │  │  │ ContentRenderer                    │  │  │
+  │  │ • Progress dots   │  │  │  switch(lesson.type) {             │  │  │
+  │  │ • Current marker  │  │  │    'text'       → MarkdownViewer   │  │  │
+  │  │ • Collapse/expand │  │  │    'video'      → VideoPlayer      │  │  │
+  │  │                   │  │  │    'quiz'       → QuizEngine       │  │  │
+  │  │ ┌───────────────┐ │  │  │    'exercise'   → ExerciseRunner   │  │  │
+  │  │ │ ProgressRing  │ │  │  │    'code'       → CodePlayground   │  │  │
+  │  │ │ 67% complete  │ │  │  │  }                                 │  │  │
+  │  │ └───────────────┘ │  │  └─────────────────────────────────────┘  │  │
+  │  └───────────────────┘  │                                           │  │
+  │                          │  ┌─────────────────────────────────────┐  │  │
+  │                          │  │ LessonNav (prev / mark complete /  │  │  │
+  │                          │  │            next)                    │  │  │
+  │                          │  └─────────────────────────────────────┘  │  │
+  │                          └───────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Progress auto-saves every 30s and on lesson navigation via
+  a debounced tRPC mutation. Optimistic updates prevent UI lag.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.5 — Content player component tree: server-rendered shell with client-side interactive content area</p>
+
+      <p>
+        Each content type renderer is <strong>lazy-loaded</strong> via <code>React.lazy()</code> with
+        a <code>&lt;Suspense&gt;</code> boundary. A student viewing text lessons never downloads the
+        CodePlayground bundle (~120KB for the Monaco editor integration). This keeps the initial
+        player load fast regardless of the course's content mix.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Content Type</th>
+            <th>Renderer</th>
+            <th>Bundle Impact</th>
+            <th>Key Dependencies</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Text / Markdown</strong></td>
+            <td><code>MarkdownViewer</code></td>
+            <td>~8KB gzipped</td>
+            <td>react-markdown, rehype-highlight (syntax highlighting for code blocks)</td>
+          </tr>
+          <tr>
+            <td><strong>Video</strong></td>
+            <td><code>VideoPlayer</code></td>
+            <td>~15KB gzipped</td>
+            <td>Native &lt;video&gt; with HLS.js for adaptive streaming; poster frame + captions</td>
+          </tr>
+          <tr>
+            <td><strong>Quiz</strong></td>
+            <td><code>QuizEngine</code></td>
+            <td>~12KB gzipped</td>
+            <td>Custom: multiple choice, true/false, fill-in-the-blank; instant feedback mode</td>
+          </tr>
+          <tr>
+            <td><strong>Interactive Exercise</strong></td>
+            <td><code>ExerciseRunner</code></td>
+            <td>~20KB gzipped</td>
+            <td>Step-by-step guided exercises with validation; supports hints and solution reveal</td>
+          </tr>
+          <tr>
+            <td><strong>Code Playground</strong></td>
+            <td><code>CodePlayground</code></td>
+            <td>~120KB gzipped</td>
+            <td>Monaco Editor (lazy), sandboxed execution via Web Workers, output panel</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 4.7 Performance Budget -->
+      <h3><span class="subsection-num">4.7</span> Performance Budget &amp; Optimization</h3>
+
+      <p>
+        Performance is not aspirational — it's enforced. The Student Hub defines a strict performance
+        budget measured in CI on every pull request. If a PR breaches the budget, it cannot merge.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Budget</th>
+            <th>Measurement</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Largest Contentful Paint (LCP)</strong></td>
+            <td>&lt; 1.2s (P75)</td>
+            <td>Vercel Speed Insights + Lighthouse CI</td>
+          </tr>
+          <tr>
+            <td><strong>First Input Delay (FID)</strong></td>
+            <td>&lt; 50ms (P75)</td>
+            <td>Vercel Speed Insights (real user monitoring)</td>
+          </tr>
+          <tr>
+            <td><strong>Cumulative Layout Shift (CLS)</strong></td>
+            <td>&lt; 0.05</td>
+            <td>Lighthouse CI; skeleton loaders prevent shift</td>
+          </tr>
+          <tr>
+            <td><strong>Total JS bundle (initial)</strong></td>
+            <td>&lt; 120KB gzipped</td>
+            <td><code>@next/bundle-analyzer</code> in CI; alert on regression</td>
+          </tr>
+          <tr>
+            <td><strong>Time to Interactive (TTI)</strong></td>
+            <td>&lt; 2.0s on 4G</td>
+            <td>Lighthouse CI with simulated throttling</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p>
+        The optimization strategy has four pillars:
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Strategy</th>
+            <th>Implementation</th>
+            <th>Impact</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>RSC-first rendering</strong></td>
+            <td>~85% of components are Server Components; zero JS shipped for static content</td>
+            <td>Eliminates 60–70% of the JavaScript that a traditional SPA would ship</td>
+          </tr>
+          <tr>
+            <td><strong>Route-based code splitting</strong></td>
+            <td>Next.js App Router automatically splits per-route; dynamic imports for heavy components</td>
+            <td>Initial bundle stays under 120KB; each route loads only its own code</td>
+          </tr>
+          <tr>
+            <td><strong>Image optimization</strong></td>
+            <td><code>next/image</code> with automatic WebP/AVIF conversion, responsive srcsets, lazy loading</td>
+            <td>Course thumbnails are the heaviest assets; optimized images save ~40% bandwidth</td>
+          </tr>
+          <tr>
+            <td><strong>Edge caching</strong></td>
+            <td>ISR pages served from Vercel's edge CDN; static assets immutably cached with content hashes</td>
+            <td>Cache hit rates &gt; 95% for catalog pages; sub-50ms TTFB on cache hit</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 4.8 Project Structure -->
+      <h3><span class="subsection-num">4.8</span> Project Structure</h3>
+
+      <p>
+        The frontend follows a <strong>feature-sliced</strong> organization within the Next.js App
+        Router conventions. Routes define the page hierarchy; shared UI and business logic live in
+        clearly separated directories.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  src/
+  ├── app/                          # Next.js App Router — routes define pages
+  │   ├── (marketing)/              # Route group: public pages (no auth required)
+  │   │   ├── page.tsx              #   / — Home (ISR)
+  │   │   ├── courses/
+  │   │   │   ├── page.tsx          #   /courses — Catalog (ISR)
+  │   │   │   └── [slug]/
+  │   │   │       └── page.tsx      #   /courses/[slug] — Detail (ISR)
+  │   │   └── layout.tsx            #   Marketing layout (navbar + footer)
+  │   │
+  │   ├── (dashboard)/              # Route group: authenticated student area
+  │   │   ├── dashboard/
+  │   │   │   ├── page.tsx          #   /dashboard — Student home (SSR)
+  │   │   │   ├── courses/
+  │   │   │   │   └── [id]/
+  │   │   │   │       └── learn/
+  │   │   │   │           └── page.tsx  # /dashboard/courses/[id]/learn (SSR+CSR)
+  │   │   │   ├── purchases/
+  │   │   │   │   └── page.tsx      #   /dashboard/purchases (SSR)
+  │   │   │   └── settings/
+  │   │   │       └── page.tsx      #   /dashboard/settings (SSR)
+  │   │   └── layout.tsx            #   Dashboard layout (sidebar + topbar)
+  │   │
+  │   ├── api/
+  │   │   └── trpc/
+  │   │       └── [trpc]/
+  │   │           └── route.ts      # tRPC HTTP handler (catch-all API route)
+  │   │
+  │   ├── layout.tsx                # Root layout (providers, fonts, metadata)
+  │   ├── not-found.tsx             # Custom 404
+  │   └── error.tsx                 # Global error boundary
+  │
+  ├── components/
+  │   ├── ui/                       # shadcn/ui components (Button, Card, etc.)
+  │   ├── course/                   # Course-specific: CourseCard, Syllabus, etc.
+  │   ├── player/                   # Content player: renderers, nav, sidebar
+  │   ├── dashboard/                # Dashboard: ProgressRing, EnrollmentCard
+  │   └── shared/                   # Cross-cutting: SearchBar, Navbar, Footer
+  │
+  ├── lib/
+  │   ├── trpc/                     # tRPC client setup, React Query integration
+  │   ├── stores/                   # Zustand stores (player, UI preferences)
+  │   ├── hooks/                    # Custom React hooks
+  │   ├── utils/                    # Pure utility functions
+  │   └── validators/               # Zod schemas (shared with API layer)
+  │
+  └── styles/
+      └── globals.css               # Tailwind v4 directives + design tokens
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 4.6 — Project structure: App Router conventions with feature-organized components and shared libraries</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Conventions That Scale</div>
+        <p style="margin-bottom:0;">
+          Three rules keep the codebase navigable as it grows: <strong>(1)</strong> Route groups
+          <code>(marketing)</code> and <code>(dashboard)</code> share no layout code — they are
+          independent UI shells. <strong>(2)</strong> Components are organized by feature domain, not
+          by component type (no <code>/atoms/molecules/organisms</code> hierarchy). <strong>(3)</strong>
+          Every file in <code>lib/</code> is a pure function or hook with zero UI — it can be tested
+          without rendering. These conventions are enforced by ESLint rules and documented in the
+          contributing guide.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 5–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
