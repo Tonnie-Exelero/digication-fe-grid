@@ -293,7 +293,7 @@
       <a href="#s2">2. Requirements</a>
       <a href="#s3">3. High-Level Architecture</a>
       <a href="#s4">4. Frontend Architecture</a>
-      <a href="#s5">5. BFF Layer</a>
+      <a href="#s5">5. API Layer (GraphQL)</a>
       <a href="#s6">6. Backend Services</a>
       <a href="#s7">7. Data Architecture</a>
       <a href="#s8">8. Authentication</a>
@@ -722,14 +722,14 @@
  │                                                                                              │
  │   React Server Components  ·  TanStack Query  ·  Zustand  ·  Tailwind CSS  ·  shadcn/ui    │
  └─────────────────────────────────────────┬────────────────────────────────────────────────────┘
-                                           │  tRPC (end-to-end type-safe calls)
+                                           │  GraphQL (type-safe API)
                                            ▼
  ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
- │                            BFF / API LAYER (Next.js API Routes + tRPC)                      │
+ │                         API LAYER (Next.js API Route + GraphQL Yoga)                        │
  │                                                                                              │
  │   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐               │
  │   │  Catalog      │  │  Enrollment   │  │  Payment      │  │  Notification │               │
- │   │  Router       │  │  Router       │  │  Router       │  │  Router       │               │
+ │   │  Module       │  │  Module       │  │  Module       │  │  Module       │               │
  │   │               │  │               │  │               │  │               │               │
  │   │  • list       │  │  • enroll     │  │  • create     │  │  • list       │               │
  │   │  • detail     │  │  • progress   │  │    session    │  │  • markRead   │               │
@@ -738,8 +738,8 @@
  │   └───────┬───────┘  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘               │
  │           │                  │                   │                  │                        │
  │   ┌───────┴──────────────────┴───────────────────┴──────────────────┴───────┐               │
- │   │                         Shared Middleware                               │               │
- │   │     Auth verify  ·  Rate limit  ·  Validation (Zod)  ·  Logging        │               │
+ │   │                       Yoga Plugins + Pothos Auth                        │               │
+ │   │     Auth scopes  ·  Rate limit  ·  Validation (Zod)  ·  Logging        │               │
  │   └────────────────────────────────────────────────────────────────────────┘               │
  └─────────────────────────────────────────┬────────────────────────────────────────────────────┘
                                            │
@@ -832,7 +832,7 @@
             </td>
             <td>
               Catalog reads hit cached SSG pages + Meilisearch. Writes go through
-              tRPC to PostgreSQL. A traffic spike on the catalog never degrades
+              GraphQL mutations to PostgreSQL. A traffic spike on the catalog never degrades
               checkout availability.
             </td>
           </tr>
@@ -867,7 +867,7 @@
               API ↔ external services. No <code>any</code>, no untyped JSON blobs.
             </td>
             <td>
-              tRPC provides compile-time type safety from React component to API handler.
+              GraphQL with Pothos provides compile-time type safety from React component to API resolver.
               Drizzle ORM provides typed database queries. Zod schemas validate all
               external input at runtime.
             </td>
@@ -894,7 +894,7 @@
        │   Cached HTML + assets    │                              │
        │                           │                              │
        │                           │──── Cache MISS? ───▶ NO ────▶│ ISR: Regenerate page
-       │                           │                              │ ─▶ tRPC: catalog.detail
+       │                           │                              │ ─▶ GraphQL: courseBySlug
        │                           │                              │ ─▶ Redis cache / PostgreSQL
        │◀──────────────────────────│◀─────────────────────────────│ Return fresh HTML
        │   Fresh HTML (cached 60s) │   Cache + serve              │ (revalidate: 60)
@@ -905,7 +905,7 @@
       <h3 style="font-size: 1.1rem; margin-top: 24px;"><strong>Pattern B:</strong> Course Purchase (Low-volume writes, authenticated, critical)</h3>
       <div class="diagram">
         <pre>
-  Student Browser         Next.js SSR          tRPC API           Stripe            PostgreSQL
+  Student Browser         Next.js SSR          GraphQL API        Stripe            PostgreSQL
        │                      │                    │                 │                   │
        │  Click "Buy Now"     │                    │                 │                   │
        │ ────────────────────▶│                    │                 │                   │
@@ -995,8 +995,8 @@
           </tr>
           <tr>
             <td><strong>API Layer</strong></td>
-            <td><span class="tech-badge">tRPC v11</span> <span class="tech-badge">Zod</span></td>
-            <td>End-to-end type-safe API with runtime validation</td>
+            <td><span class="tech-badge">GraphQL Yoga</span> <span class="tech-badge">Pothos</span> <span class="tech-badge">Zod</span></td>
+            <td>Type-safe GraphQL API with code-first schema and runtime validation</td>
           </tr>
           <tr>
             <td><strong>Student Database</strong></td>
@@ -1160,7 +1160,7 @@
           <tr>
             <td><strong>Unified deployment</strong></td>
             <td>Separate frontend/backend deploys add CI/CD complexity and version skew risk</td>
-            <td>API routes (tRPC) and frontend deploy as a single Vercel project — atomic deploys, zero skew</td>
+            <td>API route (GraphQL) and frontend deploy as a single Vercel project — atomic deploys, zero skew</td>
           </tr>
         </tbody>
       </table>
@@ -1460,7 +1460,7 @@
             <td><strong>Form State</strong></td>
             <td><span class="tech-badge">React Hook Form</span> + <span class="tech-badge">Zod</span></td>
             <td>Checkout form, review submission, profile edit, promo code input</td>
-            <td>Validation, dirty tracking, submission handling; Zod schemas shared with tRPC</td>
+            <td>Validation, dirty tracking, submission handling; Zod schemas shared with GraphQL resolvers via Pothos</td>
           </tr>
         </tbody>
       </table>
@@ -1557,7 +1557,7 @@
   └─────────────────────────────────────────────────────────────────────────┘
 
   Progress auto-saves every 30s and on lesson navigation via
-  a debounced tRPC mutation. Optimistic updates prevent UI lag.
+  a debounced GraphQL mutation. Optimistic updates prevent UI lag.
         </pre>
       </div>
       <p class="diagram-caption">Figure 4.5 — Content player component tree: server-rendered shell with client-side interactive content area</p>
@@ -1728,9 +1728,8 @@
   │   │   └── layout.tsx            #   Dashboard layout (sidebar + topbar)
   │   │
   │   ├── api/
-  │   │   └── trpc/
-  │   │       └── [trpc]/
-  │   │           └── route.ts      # tRPC HTTP handler (catch-all API route)
+  │   │   └── graphql/
+  │   │       └── route.ts          # GraphQL Yoga HTTP handler
   │   │
   │   ├── layout.tsx                # Root layout (providers, fonts, metadata)
   │   ├── not-found.tsx             # Custom 404
@@ -1744,7 +1743,7 @@
   │   └── shared/                   # Cross-cutting: SearchBar, Navbar, Footer
   │
   ├── lib/
-  │   ├── trpc/                     # tRPC client setup, React Query integration
+  │   ├── graphql/                   # urql client setup, codegen output, operations
   │   ├── stores/                   # Zustand stores (player, UI preferences)
   │   ├── hooks/                    # Custom React hooks
   │   ├── utils/                    # Pure utility functions
@@ -1772,26 +1771,28 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 5: BFF Layer (tRPC)                   -->
+    <!-- SECTION 5: API Layer (GraphQL)                -->
     <!-- ──────────────────────────────────────────── -->
     <section id="s5">
-      <h2><span class="section-num">05</span> BFF Layer — tRPC v11</h2>
+      <h2><span class="section-num">05</span> API Layer — GraphQL (Yoga + Pothos)</h2>
 
       <p>
-        The Student Hub does not expose a traditional REST or GraphQL API. Instead, it uses
-        <strong>tRPC v11</strong> as a Backend-for-Frontend (BFF) layer — a type-safe RPC framework
-        where the frontend calls server functions directly, with full TypeScript inference from
-        database to UI component. There are no API schemas to write, no code generators to run,
-        and no runtime type mismatches.
+        The Student Hub exposes a <strong>GraphQL API</strong> as its primary data layer — a
+        standards-based, schema-driven interface that serves the Next.js frontend today and is
+        designed to serve mobile apps, partner integrations, and other external consumers tomorrow.
+        The stack is built on <strong>GraphQL Yoga</strong> (a lightweight, serverless-native GraphQL
+        server by The Guild) with <strong>Pothos</strong> (a code-first, TypeScript-native schema
+        builder), giving us the multi-client reach of GraphQL with the type safety of a code-first
+        approach — no SDL files to maintain, no runtime type mismatches.
       </p>
 
-      <!-- 5.1 Why tRPC -->
-      <h3><span class="subsection-num">5.1</span> Why tRPC Over REST or GraphQL</h3>
+      <!-- 5.1 Why GraphQL -->
+      <h3><span class="subsection-num">5.1</span> Why GraphQL</h3>
 
       <p>
-        The BFF pattern means the API exists solely to serve <em>this</em> frontend. There are no
-        third-party consumers, no mobile apps hitting the same endpoints, no public API contract to
-        maintain. This constraint makes tRPC the optimal choice:
+        The Student Hub API is not a private BFF — it's a <strong>platform API</strong> designed for
+        multi-client consumption from day one. The roadmap includes mobile apps, LMS integrations,
+        and partner-facing endpoints. This forward-looking requirement drives the technology choice:
       </p>
 
       <table>
@@ -1799,250 +1800,367 @@
           <tr>
             <th>Criterion</th>
             <th>REST</th>
-            <th>GraphQL</th>
             <th>tRPC</th>
+            <th>GraphQL (chosen)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td><strong>Type safety</strong></td>
             <td>Manual (OpenAPI + codegen)</td>
-            <td>Schema + codegen (GraphQL Code Generator)</td>
-            <td>Automatic — TypeScript inference, zero codegen</td>
+            <td>Automatic — TS inference, zero codegen</td>
+            <td>Code-first via Pothos — types inferred from TS, schema generated automatically</td>
           </tr>
           <tr>
-            <td><strong>Boilerplate</strong></td>
-            <td>Route definitions, request/response types, validation middleware</td>
-            <td>Schema definitions, resolvers, type mappings</td>
-            <td>Just write a function — input/output types are inferred</td>
+            <td><strong>Multi-client support</strong></td>
+            <td>Excellent — any HTTP client</td>
+            <td>TypeScript only — unusable for mobile, third parties</td>
+            <td>Excellent — any language, introspection, rich tooling ecosystem</td>
           </tr>
           <tr>
             <td><strong>Overfetching / underfetching</strong></td>
-            <td>Common — fixed response shapes</td>
-            <td>Solved — client queries only what it needs</td>
-            <td>N/A — each procedure returns exactly what the page needs (BFF pattern)</td>
+            <td>Common — fixed response shapes per endpoint</td>
+            <td>N/A — procedure returns fixed shape (fine for single frontend)</td>
+            <td>Solved — each client queries exactly the fields it needs</td>
           </tr>
           <tr>
             <td><strong>Caching</strong></td>
             <td>HTTP-level (CDN, ETags)</td>
-            <td>Complex (normalized cache, persisted queries)</td>
-            <td>TanStack Query handles client-side caching; ISR handles edge caching</td>
+            <td>TanStack Query client-side</td>
+            <td>urql normalized cache + persisted queries for CDN edge caching</td>
           </tr>
           <tr>
-            <td><strong>Learning curve</strong></td>
-            <td>Low</td>
-            <td>Moderate–High (schema language, resolvers, N+1 problem)</td>
-            <td>Low — if you know TypeScript, you know tRPC</td>
+            <td><strong>Ecosystem &amp; tooling</strong></td>
+            <td>Broad but fragmented</td>
+            <td>Narrow — TS/Next.js only</td>
+            <td>GraphiQL, codegen, schema registry, federation-ready</td>
           </tr>
           <tr>
-            <td><strong>Multi-client support</strong></td>
-            <td>Excellent</td>
-            <td>Excellent</td>
-            <td>TypeScript clients only — perfect for a Next.js monorepo, poor for third parties</td>
+            <td><strong>Future extensibility</strong></td>
+            <td>New endpoints per feature (URL sprawl)</td>
+            <td>Locked to TS monorepo</td>
+            <td>Add fields/types without breaking existing clients; subscriptions built-in</td>
           </tr>
         </tbody>
       </table>
 
-      <div class="callout callout-warning">
-        <div class="callout-title">When tRPC Would Be the Wrong Choice</div>
+      <div class="callout callout-info">
+        <div class="callout-title">Consistency with the Supabase Ecosystem</div>
         <p style="margin-bottom:0;">
-          If the Student Hub needed to serve a native mobile app or expose a public API for
-          third-party integrations, tRPC would be a liability — it requires a TypeScript client.
-          In that scenario, GraphQL (for flexible multi-client queries) or REST with OpenAPI (for
-          broad compatibility) would be better. The current architecture explicitly scopes the
-          API to a single Next.js frontend. If a mobile app is added later, a thin REST/GraphQL
-          gateway can be placed in front of the existing tRPC procedures without rewriting business logic.
+          The Provider Hub already uses GraphQL via Supabase's auto-generated GraphQL layer (pg_graphql).
+          Using GraphQL for the Student Hub keeps the team on a single query language across both
+          systems, simplifies onboarding, and enables future schema stitching if the two APIs need
+          to be composed into a unified gateway.
         </p>
       </div>
 
-      <!-- 5.2 Router Architecture -->
-      <h3><span class="subsection-num">5.2</span> Router Architecture</h3>
+      <!-- 5.2 Technology Stack -->
+      <h3><span class="subsection-num">5.2</span> Technology Stack</h3>
 
       <p>
-        tRPC organizes procedures into <strong>routers</strong>, which are composable and nestable.
-        The Student Hub's router tree mirrors the domain model — each router owns the procedures
-        for a single bounded context.
+        The GraphQL layer is built from four complementary tools, each chosen for a specific role:
       </p>
-
-      <div class="diagram">
-        <pre>
-  tRPC Router Tree
-  ─────────────────
-
-  appRouter
-  │
-  ├── course                        # Course catalog & discovery
-  │   ├── list                      #   query  — paginated catalog with filters
-  │   ├── getBySlug                 #   query  — single course detail (ISR-compatible)
-  │   ├── getFeatured               #   query  — homepage featured courses
-  │   └── search                    #   query  — Meilisearch proxy with type safety
-  │
-  ├── enrollment                    # Student enrollments & progress
-  │   ├── listMine                  #   query  — current student's enrollments
-  │   ├── getProgress               #   query  — detailed progress for one enrollment
-  │   ├── updateProgress            #   mutation — mark lesson complete / save position
-  │   └── getCertificate            #   query  — generate/fetch completion certificate
-  │
-  ├── payment                       # Checkout & transactions
-  │   ├── createCheckoutSession     #   mutation — create Stripe Checkout session
-  │   ├── verifyPromoCode           #   query  — validate discount code
-  │   └── listTransactions          #   query  — student's purchase history
-  │
-  ├── review                        # Course reviews & ratings
-  │   ├── listByCourse              #   query  — paginated reviews for a course
-  │   ├── create                    #   mutation — submit a new review
-  │   └── getMyReview               #   query  — current student's review for a course
-  │
-  ├── user                          # Student profile
-  │   ├── getProfile                #   query  — current student's profile
-  │   └── updateProfile             #   mutation — edit display name, avatar, preferences
-  │
-  └── notification                  # In-app notifications
-      ├── list                      #   query  — paginated notification feed
-      ├── markRead                  #   mutation — mark one or all as read
-      └── getUnreadCount            #   query  — badge count for the notification bell
-        </pre>
-      </div>
-      <p class="diagram-caption">Figure 5.1 — tRPC router tree: each router owns a domain, procedures are queries or mutations</p>
-
-      <!-- 5.3 Procedure Anatomy -->
-      <h3><span class="subsection-num">5.3</span> Procedure Anatomy &amp; Type Flow</h3>
-
-      <p>
-        Every tRPC procedure follows the same structure: <strong>input validation → middleware
-        pipeline → handler → typed output</strong>. Zod schemas define the input contract and are
-        shared with frontend form validation, eliminating duplication.
-      </p>
-
-      <div class="diagram">
-        <pre>
-  Type Flow — End-to-End (No Codegen)
-  ─────────────────────────────────────
-
-  ┌───────────────────────────────────────────────────────────────────────┐
-  │  SHARED: lib/validators/course.ts                                    │
-  │                                                                       │
-  │  export const courseListInput = z.object({                            │
-  │    query: z.string().optional(),                                      │
-  │    category: z.enum([...]).optional(),                                │
-  │    sort: z.enum(['popular','newest','price_asc','price_desc']),       │
-  │    page: z.number().int().min(1).default(1),                         │
-  │    perPage: z.number().int().min(1).max(50).default(12),             │
-  │  });                                                                  │
-  └──────────────────────────┬────────────────────────────────────────────┘
-                             │ imported by both sides
-          ┌──────────────────┼──────────────────┐
-          ▼                                      ▼
-  ┌───────────────────────┐            ┌─────────────────────────────────┐
-  │  SERVER: tRPC Router   │            │  CLIENT: React Component        │
-  │                        │            │                                  │
-  │  course.list = public  │            │  const { data } =               │
-  │    .input(courseList   │            │    trpc.course.list.useQuery({  │
-  │      Input)            │            │      sort: 'popular',  ← typed │
-  │    .query(({ input })  │            │      page: 2,          ← typed │
-  │      => {              │            │    });                           │
-  │      // input is fully │            │                                  │
-  │      // typed from Zod │            │  data.courses[0].title ← typed │
-  │      return db.select()│            │  data.totalPages       ← typed │
-  │        ...             │            │                                  │
-  │    });                 │            │  // Autocomplete works.          │
-  │                        │            │  // Type errors caught at build. │
-  └───────────────────────┘            └─────────────────────────────────┘
-
-  Zero codegen. Zero schema files. Just TypeScript inference.
-  Change the return type on the server → the client shows a type error instantly.
-        </pre>
-      </div>
-      <p class="diagram-caption">Figure 5.2 — End-to-end type safety: Zod schema is written once, TypeScript infers everything else</p>
-
-      <!-- 5.4 Middleware Pipeline -->
-      <h3><span class="subsection-num">5.4</span> Middleware Pipeline</h3>
-
-      <p>
-        tRPC middleware runs before procedure handlers, forming a composable pipeline. The Student
-        Hub defines three middleware layers that procedures opt into based on their requirements.
-      </p>
-
-      <div class="diagram">
-        <pre>
-  Middleware Pipeline — Request Lifecycle
-  ────────────────────────────────────────
-
-  Incoming Request
-       │
-       ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │  1. publicProcedure                                          │
-  │     • Parses request headers                                 │
-  │     • Attaches database connection to context                │
-  │     • Sets request ID for tracing                            │
-  │     • Available to: ALL procedures                           │
-  └──────────────────────┬───────────────────────────────────────┘
-                         │
-                         ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │  2. protectedProcedure (extends public)                      │
-  │     • Verifies Clerk session token via getAuth()             │
-  │     • Rejects with UNAUTHORIZED if no valid session          │
-  │     • Attaches userId and sessionClaims to context           │
-  │     • Available to: dashboard, enrollment, payment, profile  │
-  └──────────────────────┬───────────────────────────────────────┘
-                         │
-                         ▼
-  ┌──────────────────────────────────────────────────────────────┐
-  │  3. rateLimitedProcedure (extends protected)                 │
-  │     • Checks Upstash Redis rate limit (sliding window)       │
-  │     • Default: 100 requests / 60 seconds per userId          │
-  │     • Stricter limits on mutations (20 / 60s)                │
-  │     • Rejects with TOO_MANY_REQUESTS + Retry-After header    │
-  │     • Available to: write operations (purchases, reviews)    │
-  └──────────────────────┬───────────────────────────────────────┘
-                         │
-                         ▼
-                   Procedure Handler
-                   (business logic)
-        </pre>
-      </div>
-      <p class="diagram-caption">Figure 5.3 — Middleware pipeline: each layer adds context and guards; procedures choose their entry point</p>
 
       <table>
         <thead>
           <tr>
-            <th>Procedure Base</th>
-            <th>Auth Required</th>
+            <th>Tool</th>
+            <th>Role</th>
+            <th>Why This Over Alternatives</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>GraphQL Yoga</strong></td>
+            <td>GraphQL server (HTTP handler)</td>
+            <td>Serverless-native (runs as a Next.js API route on Vercel), built-in streaming/multipart support, lighter than Apollo Server, built by The Guild (same team behind codegen)</td>
+          </tr>
+          <tr>
+            <td><strong>Pothos</strong></td>
+            <td>Code-first schema builder</td>
+            <td>Schema is pure TypeScript — types are inferred from builder definitions, no SDL files to keep in sync. Plugins for auth scopes, validation (Zod), Drizzle integration, relay-style pagination</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL Code Generator</strong></td>
+            <td>Client-side type generation</td>
+            <td>Auto-generates typed document nodes, urql hooks, and TypeScript types from <code>.graphql</code> operation files. Runs in watch mode during development</td>
+          </tr>
+          <tr>
+            <td><strong>urql</strong></td>
+            <td>GraphQL client (React)</td>
+            <td>Lightweight (~5x smaller than Apollo Client), excellent normalized cache, first-class RSC/streaming support for Next.js App Router, extensible via exchanges</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  GraphQL Stack — End-to-End Type Flow
+  ──────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  SCHEMA DEFINITION (Pothos — code-first, TypeScript-native)            │
+  │                                                                         │
+  │  const CourseType = builder.objectRef&lt;Course&gt;('Course').implement({  │
+  │    fields: (t) =&gt; ({                                                  │
+  │      id:          t.exposeID('id'),                                     │
+  │      title:       t.exposeString('title'),                              │
+  │      slug:        t.exposeString('slug'),                               │
+  │      price:       t.exposeFloat('priceInCents', {                       │
+  │                     resolve: (course) =&gt; course.priceInCents / 100,   │
+  │                   }),                                                    │
+  │      provider:    t.field({ type: ProviderType,                         │
+  │                     resolve: (course, _, ctx) =&gt;                      │
+  │                       ctx.loaders.provider.load(course.providerId),      │
+  │                   }),                                                    │
+  │      reviews:     t.field({ type: ReviewConnection, ... }),              │
+  │    }),                                                                   │
+  │  });                                                                    │
+  └───────────────────────────┬─────────────────────────────────────────────┘
+                              │ generates SDL at build time
+                              ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  GENERATED SCHEMA (schema.graphql — source of truth for codegen)       │
+  │                                                                         │
+  │  type Course {                                                          │
+  │    id: ID!                                                              │
+  │    title: String!                                                       │
+  │    slug: String!                                                        │
+  │    price: Float!                                                        │
+  │    provider: Provider!                                                  │
+  │    reviews(first: Int, after: String): ReviewConnection!                │
+  │  }                                                                      │
+  └───────────────────────────┬─────────────────────────────────────────────┘
+                              │ GraphQL Code Generator reads schema +
+                              │ client .graphql operation files
+                              ▼
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │  CLIENT: React Component (fully typed — zero manual type writing)       │
+  │                                                                         │
+  │  // operations/course.graphql                                           │
+  │  query CourseBySlug($slug: String!) {                                   │
+  │    courseBySlug(slug: $slug) {                                           │
+  │      id title price provider { name avatarUrl }                         │
+  │    }                                                                    │
+  │  }                                                                      │
+  │                                                                         │
+  │  // Component — types auto-generated by codegen                         │
+  │  const [result] = useQuery({ query: CourseBySlugDocument,               │
+  │                              variables: { slug } });                     │
+  │  result.data?.courseBySlug?.title   // ← fully typed, autocomplete      │
+  └─────────────────────────────────────────────────────────────────────────┘
+
+  Pothos infers server types from TypeScript.
+  Codegen infers client types from the schema + operations.
+  Change a field on the server → codegen catches the mismatch → build fails.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.1 — End-to-end type flow: Pothos generates the schema from TypeScript, codegen generates client types from the schema</p>
+
+      <!-- 5.3 Schema Architecture -->
+      <h3><span class="subsection-num">5.3</span> Schema Architecture</h3>
+
+      <p>
+        The GraphQL schema is organized into <strong>domain modules</strong>, each defining the types,
+        queries, and mutations for a single bounded context. Pothos's builder pattern makes modules
+        composable — each module registers its types on a shared builder instance.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  GraphQL Schema — Domain Modules
+  ─────────────────────────────────
+
+  schema
+  │
+  ├── Query
+  │   ├── courses(filter, sort, page)       → CoursePage          # Catalog
+  │   ├── courseBySlug(slug)                 → Course              # Catalog
+  │   ├── featuredCourses                   → [Course!]!          # Catalog
+  │   ├── searchCourses(query, facets)      → SearchResult        # Search
+  │   ├── myEnrollments                     → [Enrollment!]!      # Enrollment
+  │   ├── enrollmentProgress(id)            → EnrollmentProgress  # Enrollment
+  │   ├── certificate(enrollmentId)         → Certificate         # Enrollment
+  │   ├── reviewsForCourse(courseId, page)  → ReviewPage          # Review
+  │   ├── myReview(courseId)                → Review              # Review
+  │   ├── myProfile                         → StudentProfile      # User
+  │   ├── myTransactions                    → [Transaction!]!     # Payment
+  │   ├── notifications(first, after)       → NotificationConn    # Notification
+  │   └── unreadNotificationCount           → Int!                # Notification
+  │
+  ├── Mutation
+  │   ├── createCheckoutSession(courseId)    → CheckoutSession     # Payment
+  │   ├── verifyPromoCode(code, courseId)    → PromoValidation     # Payment
+  │   ├── updateProgress(input)             → EnrollmentProgress  # Enrollment
+  │   ├── createReview(input)               → Review              # Review
+  │   ├── updateProfile(input)              → StudentProfile      # User
+  │   └── markNotificationsRead(ids)        → Int!                # Notification
+  │
+  └── Types (domain objects with relationships)
+      ├── Course ─── has ──▶ Provider, Reviews, Lessons
+      ├── Enrollment ─── has ──▶ Course, Progress, Certificate
+      ├── Review ─── belongs to ──▶ Course, Student
+      ├── StudentProfile ─── has ──▶ Enrollments
+      ├── Transaction ─── belongs to ──▶ Course
+      └── Notification ─── polymorphic (enrollment, review, system)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.2 — GraphQL schema: queries and mutations organized by domain, types express relationships</p>
+
+      <!-- 5.4 Resolver Pipeline & Auth -->
+      <h3><span class="subsection-num">5.4</span> Resolver Pipeline &amp; Auth Scopes</h3>
+
+      <p>
+        Pothos's <strong>auth scope plugin</strong> replaces hand-written middleware with declarative
+        authorization rules. Each field or type declares its required auth scope, and Pothos enforces
+        it before the resolver runs. Combined with Yoga's plugin system for cross-cutting concerns,
+        this forms a composable request pipeline.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Request Pipeline — GraphQL Yoga + Pothos
+  ──────────────────────────────────────────
+
+  Incoming POST /api/graphql
+       │
+       ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  1. Yoga Plugin: Request Parsing                             │
+  │     • Validates GraphQL operation (rejects malformed)        │
+  │     • Checks persisted query hash (APQ — see §5.7)          │
+  │     • Attaches request ID for tracing                        │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  2. Yoga Plugin: Auth Context                                │
+  │     • Reads Clerk session from request headers               │
+  │     • Attaches { userId, sessionClaims } to GraphQL context  │
+  │     • Does NOT reject — unauthenticated requests proceed     │
+  │       (public queries are allowed)                           │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  3. Yoga Plugin: Rate Limiting                               │
+  │     • Checks Upstash Redis rate limit (sliding window)       │
+  │     • Mutations: 20 requests / 60s per userId                │
+  │     • Queries: 100 requests / 60s per IP (unauthenticated)   │
+  │     • Returns GraphQL error with RATE_LIMITED extension       │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  4. Pothos Auth Scopes (per-field / per-type)                │
+  │     • $public  — no auth required (catalog queries)          │
+  │     • $authenticated — valid Clerk session required          │
+  │     • $owner(resourceId) — must own the resource             │
+  │     • Rejects with FORBIDDEN before resolver executes        │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+  ┌──────────────────────────────────────────────────────────────┐
+  │  5. Pothos Validation Plugin (Zod)                           │
+  │     • Validates mutation inputs via Zod schemas              │
+  │     • Same schemas shared with frontend form validation      │
+  │     • Returns structured validation errors on failure        │
+  └──────────────────────┬───────────────────────────────────────┘
+                         │
+                         ▼
+                   Resolver Function
+                   (business logic)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.3 — Request pipeline: Yoga plugins handle cross-cutting concerns, Pothos enforces auth scopes and validation per field</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Auth Scope</th>
+            <th>Session Required</th>
             <th>Rate Limited</th>
             <th>Used By</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td><code>publicProcedure</code></td>
+            <td><code>$public</code></td>
             <td>No</td>
-            <td>No (edge-cached)</td>
-            <td><code>course.list</code>, <code>course.getBySlug</code>, <code>course.search</code>, <code>review.listByCourse</code></td>
+            <td>IP-based (100/60s)</td>
+            <td><code>courses</code>, <code>courseBySlug</code>, <code>searchCourses</code>, <code>reviewsForCourse</code></td>
           </tr>
           <tr>
-            <td><code>protectedProcedure</code></td>
+            <td><code>$authenticated</code></td>
             <td>Yes</td>
             <td>No</td>
-            <td><code>enrollment.listMine</code>, <code>user.getProfile</code>, <code>notification.list</code></td>
+            <td><code>myEnrollments</code>, <code>myProfile</code>, <code>notifications</code></td>
           </tr>
           <tr>
-            <td><code>rateLimitedProcedure</code></td>
+            <td><code>$authenticated</code> + rate limit</td>
             <td>Yes</td>
-            <td>Yes</td>
-            <td><code>payment.createCheckoutSession</code>, <code>review.create</code>, <code>enrollment.updateProgress</code></td>
+            <td>Yes (20/60s)</td>
+            <td><code>createCheckoutSession</code>, <code>createReview</code>, <code>updateProgress</code></td>
           </tr>
         </tbody>
       </table>
 
-      <!-- 5.5 Server-Side Calls -->
-      <h3><span class="subsection-num">5.5</span> Server-Side Calls (RSC Integration)</h3>
+      <!-- 5.5 DataLoader & N+1 Prevention -->
+      <h3><span class="subsection-num">5.5</span> DataLoader &amp; N+1 Prevention</h3>
 
       <p>
-        In the App Router, React Server Components can call tRPC procedures <strong>directly on the
-        server</strong> — no HTTP round-trip, no serialization overhead. This is the primary data
-        fetching pattern for SSR and ISR pages.
+        GraphQL's nested resolution model makes it susceptible to the <strong>N+1 query problem</strong>
+        — fetching a list of 20 courses and then their providers would naively execute 21 database
+        queries. The Student Hub uses <strong>DataLoader</strong> (request-scoped, per-field batching)
+        to collapse these into 2 queries.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  N+1 Prevention — DataLoader in Action
+  ───────────────────────────────────────
+
+  Query:
+    courses(first: 20) {
+      title
+      provider { name avatarUrl }    ← N+1 risk here
+      reviews(first: 3) { rating }   ← N+1 risk here too
+    }
+
+  Without DataLoader (21 + 20 = 41 queries):
+  ────────────────────────────────────────────
+  SELECT * FROM courses LIMIT 20;                           -- 1 query
+  SELECT * FROM providers WHERE id = $1;  -- repeated 20x  -- 20 queries
+  SELECT * FROM reviews WHERE course_id = $1 LIMIT 3;      -- 20 queries
+                                                            ──────────
+                                                            41 queries 🔴
+
+  With DataLoader (3 queries):
+  ────────────────────────────
+  SELECT * FROM courses LIMIT 20;                           -- 1 query
+  SELECT * FROM providers WHERE id IN ($1..$20);            -- 1 batched query
+  SELECT * FROM reviews WHERE course_id IN ($1..$20)        -- 1 batched query
+    AND rank &lt;= 3;  (window function)
+                                                            ──────────
+                                                            3 queries  🟢
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 5.4 — DataLoader batching: N+1 queries collapsed to constant-count queries via request-scoped batching</p>
+
+      <p>
+        DataLoaders are created fresh per request (preventing cross-request cache pollution) and
+        registered on the GraphQL context. Pothos's Drizzle plugin auto-generates loaders for
+        common patterns (foreign key lookups), while custom loaders handle complex cases like
+        windowed review fetching.
+      </p>
+
+      <!-- 5.6 Server-Side Calls (RSC Integration) -->
+      <h3><span class="subsection-num">5.6</span> Server-Side Calls (RSC Integration)</h3>
+
+      <p>
+        In the App Router, React Server Components can execute GraphQL operations <strong>directly on
+        the server</strong> via Yoga's <code>execute()</code> function — no HTTP round-trip, no
+        serialization overhead. This is the primary data fetching pattern for SSR and ISR pages.
       </p>
 
       <div class="diagram">
@@ -2053,14 +2171,15 @@
   Pattern A: Server Component (SSR / ISR pages)
   ──────────────────────────────────────────────
 
-  ┌─────────────────────────┐          ┌─────────────────────┐
-  │  page.tsx (Server)      │  direct  │  tRPC Router         │
-  │                         │  call    │                      │
-  │  const courses = await  │─────────▶│  course.list()       │
-  │    caller.course.list() │  (no HTTP)│                     │
-  │                         │          │  Returns typed data   │
-  │  return &lt;CourseGrid    │◀─────────│                      │
-  │    courses={courses} /&gt;│          └─────────────────────┘
+  ┌─────────────────────────┐          ┌────────────────────────┐
+  │  page.tsx (Server)      │  direct  │  GraphQL Yoga          │
+  │                         │  execute │  (in-process)           │
+  │  const { data } = await│─────────▶│                         │
+  │    execute(CoursesDoc,  │ (no HTTP)│  resolvers run,         │
+  │    { variables })       │          │  DataLoaders batch      │
+  │                         │          │                         │
+  │  return &lt;CourseGrid    │◀─────────│  Returns typed data     │
+  │    courses={data} /&gt;   │          └────────────────────────┘
   └─────────────────────────┘
   Latency: ~5ms (function call, same process)
 
@@ -2068,109 +2187,43 @@
   Pattern B: Client Component (interactive features)
   ──────────────────────────────────────────────────
 
-  ┌─────────────────────────┐  HTTP    ┌──────────────────────┐
-  │  PlayerSidebar (Client) │  POST    │  /api/trpc/[trpc]    │
-  │                         │─────────▶│  (API Route handler)  │
-  │  const { mutate } =     │          │                      │
-  │    trpc.enrollment      │          │  enrollment           │
-  │    .updateProgress      │          │    .updateProgress()  │
-  │    .useMutation()       │          │                      │
-  │                         │◀─────────│  Returns typed data   │
-  │  mutate({ lessonId,     │  JSON    └──────────────────────┘
-  │    completed: true })   │
+  ┌─────────────────────────┐  HTTP    ┌────────────────────────┐
+  │  PlayerSidebar (Client) │  POST    │  /api/graphql          │
+  │                         │─────────▶│  (Yoga HTTP handler)    │
+  │  const [result, exec] = │          │                         │
+  │    useMutation(         │          │  updateProgress         │
+  │      UpdateProgressDoc  │          │    resolver runs        │
+  │    );                   │          │                         │
+  │                         │◀─────────│  Returns typed data     │
+  │  exec({ input: {       │  JSON    └────────────────────────┘
+  │    lessonId,            │
+  │    completed: true }})  │
   └─────────────────────────┘
   Latency: ~30-80ms (HTTP, but optimistic update makes it feel instant)
         </pre>
       </div>
-      <p class="diagram-caption">Figure 5.4 — Two calling patterns: server components call directly (zero HTTP), client components call via API route</p>
+      <p class="diagram-caption">Figure 5.5 — Two calling patterns: server components execute in-process (zero HTTP), client components call via API route</p>
 
       <div class="callout callout-info">
         <div class="callout-title">Prefetching &amp; Hydration</div>
         <p style="margin-bottom:0;">
           For pages that are server-rendered but contain client-interactive elements (e.g., the
-          dashboard), the server prefetches data via the tRPC caller and <strong>dehydrates</strong>
-          the TanStack Query cache into the HTML payload. When the client hydrates, TanStack Query
-          picks up the pre-filled cache — no loading spinner, no duplicate fetch. This is configured
-          via <code>createSSRHelper()</code> in the page's server component, and the dehydrated state
-          is passed through a <code>&lt;HydrationBoundary&gt;</code> provider.
+          dashboard), the server prefetches data via Yoga's <code>execute()</code> and <strong>dehydrates</strong>
+          the urql cache into the HTML payload. When the client hydrates, urql picks up the pre-filled
+          cache — no loading spinner, no duplicate fetch. This is configured via urql's
+          <code>ssrExchange</code> in the server component, and the serialized cache is passed through
+          a <code>&lt;Provider&gt;</code> wrapper.
         </p>
       </div>
 
-      <!-- 5.6 Error Handling -->
-      <h3><span class="subsection-num">5.6</span> Error Handling &amp; Error Codes</h3>
+      <!-- 5.7 Persisted Queries & Transport -->
+      <h3><span class="subsection-num">5.7</span> Persisted Queries &amp; Transport Configuration</h3>
 
       <p>
-        tRPC uses typed error codes that map to HTTP status codes. The Student Hub defines a
-        consistent error contract so the frontend can handle every failure gracefully.
-      </p>
-
-      <table>
-        <thead>
-          <tr>
-            <th>tRPC Error Code</th>
-            <th>HTTP Status</th>
-            <th>When Used</th>
-            <th>Frontend Handling</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td><code>BAD_REQUEST</code></td>
-            <td>400</td>
-            <td>Zod validation failure on input</td>
-            <td>Show field-level errors on the form (Zod errors are structured)</td>
-          </tr>
-          <tr>
-            <td><code>UNAUTHORIZED</code></td>
-            <td>401</td>
-            <td>No valid Clerk session</td>
-            <td>Redirect to <code>/sign-in</code> with return URL</td>
-          </tr>
-          <tr>
-            <td><code>FORBIDDEN</code></td>
-            <td>403</td>
-            <td>Valid session but insufficient permissions (e.g., accessing another student's data)</td>
-            <td>Show "access denied" message</td>
-          </tr>
-          <tr>
-            <td><code>NOT_FOUND</code></td>
-            <td>404</td>
-            <td>Course slug doesn't exist, enrollment not found</td>
-            <td>Show 404 page or "course not found" UI</td>
-          </tr>
-          <tr>
-            <td><code>TOO_MANY_REQUESTS</code></td>
-            <td>429</td>
-            <td>Rate limit exceeded</td>
-            <td>Show retry message with countdown timer</td>
-          </tr>
-          <tr>
-            <td><code>INTERNAL_SERVER_ERROR</code></td>
-            <td>500</td>
-            <td>Unhandled exception in procedure handler</td>
-            <td>Show generic error + report to Sentry; error details never leaked to client</td>
-          </tr>
-        </tbody>
-      </table>
-
-      <div class="callout callout-success">
-        <div class="callout-title">Error Boundary Integration</div>
-        <p style="margin-bottom:0;">
-          Each route segment in the App Router has an <code>error.tsx</code> boundary that catches
-          tRPC errors thrown during SSR. For client-side errors, TanStack Query's <code>onError</code>
-          callback feeds into a centralized error handler that logs to Sentry, shows a toast
-          notification for recoverable errors, and redirects for auth errors. The user never sees
-          a raw stack trace or a blank white page.
-        </p>
-      </div>
-
-      <!-- 5.7 API Route Configuration -->
-      <h3><span class="subsection-num">5.7</span> API Route &amp; Transport Configuration</h3>
-
-      <p>
-        The tRPC API is exposed via a single catch-all Next.js API route at
-        <code>/api/trpc/[trpc]/route.ts</code>. This handler processes all client-side tRPC calls
-        over HTTP.
+        The GraphQL API is exposed via a single Next.js API route at <code>/api/graphql/route.ts</code>.
+        To optimize for production, the Student Hub uses <strong>Automatic Persisted Queries (APQ)</strong>
+        — the client sends a query hash instead of the full query string, reducing payload size and
+        enabling CDN caching of GET requests.
       </p>
 
       <table>
@@ -2183,61 +2236,141 @@
         </thead>
         <tbody>
           <tr>
-            <td><strong>Transport</strong></td>
-            <td>HTTP (httpBatchLink)</td>
-            <td>Batches multiple concurrent queries into a single HTTP request, reducing round trips</td>
+            <td><strong>Server</strong></td>
+            <td>GraphQL Yoga (Next.js API route)</td>
+            <td>Single <code>/api/graphql</code> endpoint; Yoga handles GET (persisted) and POST (mutations)</td>
           </tr>
           <tr>
-            <td><strong>Serialization</strong></td>
-            <td>SuperJSON</td>
-            <td>Preserves Date, Map, Set, BigInt, and other JS types that JSON.stringify loses</td>
+            <td><strong>Client</strong></td>
+            <td>urql with <code>fetchExchange</code> + <code>cacheExchange</code></td>
+            <td>Normalized document cache; automatic cache invalidation on mutations via <code>__typename</code></td>
           </tr>
           <tr>
-            <td><strong>Max batch size</strong></td>
-            <td>10 procedures per request</td>
-            <td>Prevents abuse; typical page load batches 2–4 queries</td>
+            <td><strong>Persisted queries</strong></td>
+            <td>APQ via SHA-256 hash</td>
+            <td>Queries sent as hashes; reduces payload ~90%; enables GET-based CDN caching for reads</td>
+          </tr>
+          <tr>
+            <td><strong>Query depth limit</strong></td>
+            <td>7 levels</td>
+            <td>Prevents deeply nested abuse queries; Student Hub's deepest legitimate query is 4 levels</td>
+          </tr>
+          <tr>
+            <td><strong>Query complexity limit</strong></td>
+            <td>1000 points</td>
+            <td>Each field = 1 point, connections = 10 × child cost; prevents resource exhaustion</td>
+          </tr>
+          <tr>
+            <td><strong>Introspection</strong></td>
+            <td>Enabled in dev, disabled in production</td>
+            <td>Development tooling (GraphiQL) works locally; production schema is not discoverable</td>
           </tr>
           <tr>
             <td><strong>Request timeout</strong></td>
             <td>10 seconds</td>
             <td>Generous enough for Stripe session creation; short enough to fail fast on hung connections</td>
           </tr>
-          <tr>
-            <td><strong>Response caching</strong></td>
-            <td>Per-procedure <code>Cache-Control</code> headers for public queries</td>
-            <td>Public queries (<code>course.list</code>, <code>course.getBySlug</code>) return <code>s-maxage=60, stale-while-revalidate=300</code></td>
-          </tr>
         </tbody>
       </table>
 
       <div class="diagram">
         <pre>
-  Request Batching — How httpBatchLink Works
-  ────────────────────────────────────────────
+  Persisted Queries — APQ Flow
+  ─────────────────────────────
 
-  Without batching (3 HTTP requests):
-  ┌────────┐     GET /api/trpc/course.getBySlug     ┌────────┐
-  │        │────────────────────────────────────────▶│        │
-  │        │◀────────────────────────────────────────│        │
-  │        │     GET /api/trpc/review.listByCourse   │        │
-  │ Client │────────────────────────────────────────▶│ Server │
-  │        │◀────────────────────────────────────────│        │
-  │        │     GET /api/trpc/course.getFeatured     │        │
-  │        │────────────────────────────────────────▶│        │
-  │        │◀────────────────────────────────────────│        │
-  └────────┘                                         └────────┘
-  3 round trips × ~30ms = ~90ms network overhead
+  First request (cache miss — full query sent):
+  ┌────────┐  GET /api/graphql?extensions={"persistedQuery":    ┌────────┐
+  │        │      {"sha256Hash":"abc123"}}                       │        │
+  │ Client │───────────────────────────────────────────────────▶│ Server │
+  │        │◀── 404: PersistedQueryNotFound ───────────────────│        │
+  │        │                                                    │        │
+  │        │  POST /api/graphql                                 │        │
+  │        │    { query: "{ courses { id title } }",            │        │
+  │        │      extensions: { persistedQuery:                 │        │
+  │        │        { sha256Hash: "abc123" } } }                │        │
+  │        │───────────────────────────────────────────────────▶│        │
+  │        │◀── 200: { data: { courses: [...] } } ─────────────│        │
+  └────────┘   Server caches hash → query mapping              └────────┘
 
-  With httpBatchLink (1 HTTP request):
-  ┌────────┐     GET /api/trpc/course.getBySlug,     ┌────────┐
-  │        │         review.listByCourse,             │        │
-  │ Client │────────────────────────────────────────▶│ Server │
-  │        │◀────────────────────────────────────────│        │
-  └────────┘         course.getFeatured              └────────┘
-  1 round trip × ~30ms = ~30ms network overhead (3x improvement)
+  Subsequent requests (cache hit — hash only, CDN-cacheable):
+  ┌────────┐  GET /api/graphql?extensions={"persistedQuery":    ┌────────┐
+  │        │      {"sha256Hash":"abc123"}}                       │        │
+  │ Client │───────────────────────────────────────────────────▶│ Server │
+  │        │◀── 200: { data: { courses: [...] } } ─────────────│        │
+  └────────┘   Cache-Control: s-maxage=60                       └────────┘
+  Payload: ~50 bytes (hash) vs ~500 bytes (full query) — 90% reduction
         </pre>
       </div>
-      <p class="diagram-caption">Figure 5.5 — Request batching: httpBatchLink combines concurrent queries into a single HTTP request</p>
+      <p class="diagram-caption">Figure 5.6 — Automatic Persisted Queries: first request registers the query, subsequent requests use only the hash</p>
+
+      <!-- 5.8 Error Handling -->
+      <h3><span class="subsection-num">5.8</span> Error Handling &amp; Error Extensions</h3>
+
+      <p>
+        GraphQL errors are returned in the standard <code>errors</code> array alongside any partial
+        <code>data</code>. The Student Hub uses <strong>error extensions</strong> to provide structured,
+        machine-readable error metadata that the frontend can act on programmatically.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Error Code (extension)</th>
+            <th>HTTP Status</th>
+            <th>When Used</th>
+            <th>Frontend Handling</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>VALIDATION_ERROR</code></td>
+            <td>200 (GraphQL)</td>
+            <td>Zod validation failure on mutation input</td>
+            <td>Show field-level errors on the form (structured Zod errors in extension)</td>
+          </tr>
+          <tr>
+            <td><code>UNAUTHENTICATED</code></td>
+            <td>200 (GraphQL)</td>
+            <td>No valid Clerk session for protected field</td>
+            <td>Redirect to <code>/sign-in</code> with return URL</td>
+          </tr>
+          <tr>
+            <td><code>FORBIDDEN</code></td>
+            <td>200 (GraphQL)</td>
+            <td>Valid session but insufficient permissions (e.g., accessing another student's data)</td>
+            <td>Show "access denied" message</td>
+          </tr>
+          <tr>
+            <td><code>NOT_FOUND</code></td>
+            <td>200 (GraphQL)</td>
+            <td>Course slug doesn't exist, enrollment not found</td>
+            <td>Show 404 page or "course not found" UI</td>
+          </tr>
+          <tr>
+            <td><code>RATE_LIMITED</code></td>
+            <td>200 (GraphQL)</td>
+            <td>Rate limit exceeded</td>
+            <td>Show retry message with countdown (retryAfter in extension)</td>
+          </tr>
+          <tr>
+            <td><code>INTERNAL_ERROR</code></td>
+            <td>200 (GraphQL)</td>
+            <td>Unhandled exception in resolver</td>
+            <td>Show generic error + report to Sentry; error details masked in production</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Error Boundary Integration</div>
+        <p style="margin-bottom:0;">
+          Each route segment in the App Router has an <code>error.tsx</code> boundary that catches
+          GraphQL errors thrown during SSR. For client-side errors, urql's <code>error</code> state
+          feeds into a centralized error handler (via a custom urql exchange) that logs to Sentry,
+          shows a toast notification for recoverable errors, and redirects for auth errors. The
+          user never sees a raw stack trace or a blank white page.
+        </p>
+      </div>
 
     </section>
 
@@ -2249,7 +2382,7 @@
 
       <p>
         The Student Hub's backend is not a monolithic server — it's a set of <strong>serverless
-        functions</strong> deployed on Vercel, organized as tRPC procedure handlers (Section 5) and
+        functions</strong> deployed on Vercel, organized as GraphQL resolvers (Section 5) and
         dedicated service modules. Each service owns a bounded context, communicates via typed
         function calls (not HTTP between services), and has clear input/output contracts. This
         section details the five core backend services and their internal architecture.
@@ -2264,8 +2397,8 @@
   ────────────────────
 
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │                         tRPC Procedure Handlers                        │
-  │               (thin layer — validates input, calls services)            │
+  │                       GraphQL Resolvers (Pothos)                       │
+  │             (thin layer — validates input, calls services)              │
   └──────┬──────────┬──────────┬──────────┬──────────┬─────────────────────┘
          │          │          │          │          │
          ▼          ▼          ▼          ▼          ▼
@@ -2295,7 +2428,7 @@
     └─────────┘ └─────────┘         └──────────┘
         </pre>
       </div>
-      <p class="diagram-caption">Figure 6.1 — Backend service map: five services behind tRPC handlers, unified by a shared data access layer</p>
+      <p class="diagram-caption">Figure 6.1 — Backend service map: five services behind GraphQL resolvers, unified by a shared data access layer</p>
 
       <div class="callout callout-info">
         <div class="callout-title">Why Not Microservices?</div>
@@ -2543,7 +2676,7 @@
   Progress Tracking — Optimistic Update Flow
   ────────────────────────────────────────────
 
-  Student clicks                  Client (TanStack Query)              Server (tRPC)
+  Student clicks                  Client (urql)                        Server (GraphQL)
   "Mark Complete"
        │
        │  1. Optimistic update:
@@ -2673,7 +2806,7 @@
 
       <p>
         The Notification Service handles both <strong>in-app notifications</strong> (stored in
-        Postgres, fetched via tRPC) and <strong>transactional emails</strong> (sent via Resend).
+        Postgres, fetched via GraphQL) and <strong>transactional emails</strong> (sent via Resend).
         It is event-driven: other services emit events, and the Notification Service decides what
         to send and through which channel.
       </p>
