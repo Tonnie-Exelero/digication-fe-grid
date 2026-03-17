@@ -3551,7 +3551,527 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 8–12: Placeholder for iterative dev  -->
+    <!-- SECTION 8: Authentication                     -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s8">
+      <h2><span class="section-num">08</span> Authentication &amp; Identity</h2>
+
+      <p>
+        Authentication is handled by <strong>Clerk</strong>, a managed identity platform that provides
+        registration, login, session management, MFA, and social OAuth — all without building or
+        maintaining auth infrastructure. The Student Hub's auth system is <strong>completely separate</strong>
+        from the Provider Hub's Supabase Auth — there is no SSO between them, no shared user table,
+        and no cross-system session. This is intentional: students and providers are different
+        user populations with different identity requirements.
+      </p>
+
+      <!-- 8.1 Why Clerk -->
+      <h3><span class="subsection-num">8.1</span> Why Clerk</h3>
+
+      <p>
+        Building auth from scratch (JWT issuance, password hashing, session rotation, OAuth provider
+        integration, MFA, device management) is a significant and ongoing security liability. Clerk
+        externalizes all of this with a developer experience optimized for Next.js.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Criterion</th>
+            <th>Clerk</th>
+            <th>NextAuth.js (Auth.js)</th>
+            <th>Supabase Auth</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Session strategy</strong></td>
+            <td>Short-lived JWTs (60s) + automatic silent refresh; edge-verifiable</td>
+            <td>Database sessions or JWTs (manual config)</td>
+            <td>JWTs via GoTrue; requires Supabase client for verification</td>
+          </tr>
+          <tr>
+            <td><strong>Edge middleware</strong></td>
+            <td>First-class — <code>clerkMiddleware()</code> runs at the edge, verifies sessions in &lt;1ms</td>
+            <td>Limited edge support (requires adapter)</td>
+            <td>Not edge-native (server-side only)</td>
+          </tr>
+          <tr>
+            <td><strong>Social login</strong></td>
+            <td>20+ providers pre-configured (Google, GitHub, Apple, etc.); zero OAuth plumbing</td>
+            <td>Provider-by-provider configuration with credentials</td>
+            <td>Built-in but requires Supabase project coupling</td>
+          </tr>
+          <tr>
+            <td><strong>MFA</strong></td>
+            <td>Built-in TOTP + SMS; user-facing management UI included</td>
+            <td>Community adapters (not built-in)</td>
+            <td>Built-in TOTP</td>
+          </tr>
+          <tr>
+            <td><strong>UI components</strong></td>
+            <td>Pre-built <code>&lt;SignIn /&gt;</code>, <code>&lt;UserButton /&gt;</code>, <code>&lt;UserProfile /&gt;</code> — themeable, accessible</td>
+            <td>Requires building all UI</td>
+            <td>Basic pre-built UI (less customizable)</td>
+          </tr>
+          <tr>
+            <td><strong>Webhook events</strong></td>
+            <td>user.created, session.created, user.updated — for sync with local DB</td>
+            <td>Limited (manual event handling)</td>
+            <td>Triggers via Supabase Functions</td>
+          </tr>
+          <tr>
+            <td><strong>Separation from Provider Hub</strong></td>
+            <td>Fully independent — own tenant, own user pool</td>
+            <td>Independent (custom deployment)</td>
+            <td>Coupled to Supabase project — would share infra with Provider Hub</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Why Not Supabase Auth for Students?</div>
+        <p style="margin-bottom:0;">
+          The Provider Hub uses Supabase Auth because providers are tightly coupled to Supabase's
+          database and RLS policies. Using Supabase Auth for students would either <strong>(a)</strong>
+          require the Student Hub to depend on the Provider Hub's Supabase project (creating a
+          dangerous coupling), or <strong>(b)</strong> require a second Supabase project just for auth
+          (unnecessary complexity when Clerk does it better for Next.js). Clerk provides cleaner
+          separation, better edge middleware support, and a richer component library.
+        </p>
+      </div>
+
+      <!-- 8.2 Authentication Flow -->
+      <h3><span class="subsection-num">8.2</span> Authentication Flow</h3>
+
+      <p>
+        Clerk manages the full authentication lifecycle. The Student Hub interacts with Clerk
+        at three touchpoints: <strong>edge middleware</strong> (route protection), <strong>React
+        components</strong> (UI), and <strong>GraphQL context</strong> (API authorization).
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Authentication Flow — Registration to API Call
+  ─────────────────────────────────────────────────
+
+  1. REGISTRATION / LOGIN
+  ─────────────────────────
+  ┌──────────────┐                    ┌──────────────┐              ┌──────────────┐
+  │   Student    │   /sign-up page    │  Clerk       │   user.      │  Student Hub │
+  │   Browser    │   &lt;SignUp /&gt;      │  (hosted)    │   created    │  Webhook     │
+  │              │──────────────────▶ │              │   webhook    │  Handler     │
+  │              │   Email/OAuth      │  Creates     │─────────────▶│              │
+  │              │◀──────────────────│  user record  │              │  Stores      │
+  │              │   Session cookie   │  + session   │              │  student_id  │
+  │              │   (httpOnly,       │              │              │  mapping in  │
+  │              │    secure,         │              │              │  local DB    │
+  │              │    SameSite=Lax)   │              │              │              │
+  └──────────────┘                    └──────────────┘              └──────────────┘
+
+
+  2. SUBSEQUENT PAGE LOAD (Edge Middleware)
+  ──────────────────────────────────────────
+  ┌──────────────┐    Request + cookie    ┌──────────────────────────────────────┐
+  │   Student    │───────────────────────▶│  Vercel Edge Middleware              │
+  │   Browser    │                        │                                      │
+  │              │                        │  clerkMiddleware():                  │
+  │              │                        │    1. Read __session cookie          │
+  │              │                        │    2. Verify JWT signature (edge,    │
+  │              │                        │       no network call — JWKS cached) │
+  │              │                        │    3. Check expiry (60s lifetime)    │
+  │              │                        │    4. If expired: Clerk.js silent    │
+  │              │                        │       refresh (client-side)          │
+  │              │                        │    5. Attach auth to request         │
+  │              │                        │                                      │
+  │              │                        │  Route protection:                   │
+  │              │                        │    /dashboard/* → must be signed in  │
+  │              │                        │    /courses/*   → public             │
+  │              │                        │    /checkout/*  → must be signed in  │
+  │              │◀───────────────────────│                                      │
+  │              │    200 or 302 /sign-in └──────────────────────────────────────┘
+  └──────────────┘
+
+
+  3. GRAPHQL API CALL (Server-side auth)
+  ────────────────────────────────────────
+  ┌──────────────┐   POST /api/graphql   ┌──────────────────────────────────────┐
+  │  Client      │   + session cookie    │  GraphQL Yoga                        │
+  │  Component   │─────────────────────▶│                                       │
+  │  (urql)      │                       │  Auth Context Plugin:                 │
+  │              │                       │    const { userId } = getAuth(req);   │
+  │              │                       │    ctx.userId = userId;               │
+  │              │                       │                                       │
+  │              │                       │  Pothos Auth Scope:                   │
+  │              │                       │    $authenticated:                    │
+  │              │                       │      if (!ctx.userId) throw UNAUTH    │
+  │              │                       │                                       │
+  │              │◀──────────────────────│  Resolver executes with ctx.userId    │
+  └──────────────┘   GraphQL response    └──────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 8.1 — Authentication flow: Clerk manages identity, edge middleware protects routes, GraphQL context carries auth state</p>
+
+      <!-- 8.3 Session Management -->
+      <h3><span class="subsection-num">8.3</span> Session Management</h3>
+
+      <p>
+        Clerk uses a <strong>short-lived JWT + silent refresh</strong> strategy that balances security
+        (minimal window for token theft) with performance (no server round-trip for verification
+        at the edge).
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Property</th>
+            <th>Value</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Token type</strong></td>
+            <td>JWT (RS256, asymmetric)</td>
+            <td>Edge-verifiable with public key — no network call to Clerk on every request</td>
+          </tr>
+          <tr>
+            <td><strong>Token lifetime</strong></td>
+            <td>60 seconds</td>
+            <td>Short-lived = minimal exposure window; silent refresh is transparent to user</td>
+          </tr>
+          <tr>
+            <td><strong>Refresh mechanism</strong></td>
+            <td>Clerk.js client SDK silently refreshes before expiry</td>
+            <td>No full-page reload; refresh happens in background via Clerk's __clerk_session cookie rotation</td>
+          </tr>
+          <tr>
+            <td><strong>Cookie settings</strong></td>
+            <td><code>httpOnly</code>, <code>Secure</code>, <code>SameSite=Lax</code></td>
+            <td>httpOnly prevents JS access (XSS safe); Secure enforces HTTPS; Lax allows top-level navigation</td>
+          </tr>
+          <tr>
+            <td><strong>Session duration</strong></td>
+            <td>7 days (configurable in Clerk dashboard)</td>
+            <td>Students typically return within a week; longer sessions reduce login friction</td>
+          </tr>
+          <tr>
+            <td><strong>Multi-device</strong></td>
+            <td>Allowed — each device has its own session</td>
+            <td>Students switch between laptop, tablet, and phone naturally</td>
+          </tr>
+          <tr>
+            <td><strong>Revocation</strong></td>
+            <td>Clerk dashboard + API; takes effect at next refresh (≤60s)</td>
+            <td>Compromised accounts can be locked immediately; JWT expiry limits damage window</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  JWT Lifecycle — Silent Refresh
+  ───────────────────────────────
+
+  Time ──────────────────────────────────────────────────────────▶
+
+  t=0s        t=50s          t=60s         t=110s        t=120s
+  │            │              │              │              │
+  │  JWT #1    │  Clerk.js    │  JWT #1      │  Clerk.js    │
+  │  issued    │  starts      │  expires     │  starts      │
+  │            │  refresh     │              │  refresh     │
+  │            │              │              │              │
+  │  ┌─────────┴──┐   ┌──────┴──────┐   ┌──┴──────────┐   │
+  │  │ JWT #1     │   │ JWT #2      │   │ JWT #2      │   │
+  │  │ valid      │   │ issued      │   │ valid       │   │
+  │  │            │   │ (overlaps)  │   │             │   │
+  │  └────────────┘   └─────────────┘   └─────────────┘   │
+
+  Overlap window: ~10s where both JWT #1 and #2 are valid.
+  This prevents race conditions during refresh.
+  Edge middleware always accepts the newest valid JWT.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 8.2 — JWT silent refresh: Clerk.js refreshes 10s before expiry, ensuring seamless authentication continuity</p>
+
+      <!-- 8.4 Route Protection -->
+      <h3><span class="subsection-num">8.4</span> Route Protection Matrix</h3>
+
+      <p>
+        The Student Hub uses <strong>edge middleware</strong> as the first line of route protection.
+        This runs before any server-side rendering or API handling, at sub-millisecond latency.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Route Pattern</th>
+            <th>Auth Required</th>
+            <th>Middleware Action</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>/</code></td>
+            <td>No</td>
+            <td>Pass through</td>
+            <td>Marketing landing page — maximize reach</td>
+          </tr>
+          <tr>
+            <td><code>/courses</code>, <code>/courses/[slug]</code></td>
+            <td>No</td>
+            <td>Pass through</td>
+            <td>Catalog browsing is public — SEO and discovery</td>
+          </tr>
+          <tr>
+            <td><code>/search</code></td>
+            <td>No</td>
+            <td>Pass through</td>
+            <td>Search is public — drives organic traffic</td>
+          </tr>
+          <tr>
+            <td><code>/sign-in</code>, <code>/sign-up</code></td>
+            <td>No (redirect if already signed in)</td>
+            <td>Redirect to <code>/dashboard</code> if session exists</td>
+            <td>Prevent authenticated users from seeing auth pages</td>
+          </tr>
+          <tr>
+            <td><code>/checkout/*</code></td>
+            <td>Yes</td>
+            <td>Redirect to <code>/sign-in?redirect_url=/checkout/...</code></td>
+            <td>Payment requires identity — must know who is purchasing</td>
+          </tr>
+          <tr>
+            <td><code>/dashboard/*</code></td>
+            <td>Yes</td>
+            <td>Redirect to <code>/sign-in?redirect_url=/dashboard/...</code></td>
+            <td>All student data is personal — enrollments, progress, settings</td>
+          </tr>
+          <tr>
+            <td><code>/api/graphql</code></td>
+            <td>Varies (per-field)</td>
+            <td>Pass through (auth checked in Pothos scope)</td>
+            <td>Public queries (catalog) don't need auth; mutations do — handled at resolver level</td>
+          </tr>
+          <tr>
+            <td><code>/api/webhooks/*</code></td>
+            <td>No (signature verified)</td>
+            <td>Pass through</td>
+            <td>Webhooks from Stripe/Clerk/Provider use HMAC signatures, not session auth</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Edge Middleware — middleware.ts
+  ───────────────────────────────
+
+  import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
+
+  const isPublicRoute = createRouteMatcher([
+    '/',
+    '/courses(.*)',
+    '/search(.*)',
+    '/sign-in(.*)',
+    '/sign-up(.*)',
+    '/api/webhooks(.*)',
+    '/api/graphql',          // Auth handled per-field in Pothos
+  ]);
+
+  export default clerkMiddleware(async (auth, req) =&gt; {
+    if (!isPublicRoute(req)) {
+      await auth.protect();  // Redirects to /sign-in if unauthenticated
+    }
+  });
+
+  export const config = {
+    matcher: ['/((?!_next|.*\\..*).*)'],  // Skip static assets
+  };
+
+  Execution: Vercel Edge Network → &lt;1ms per request
+  No cold start. No database lookup. Just JWT signature verification.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 8.3 — Edge middleware: route protection runs at the edge with sub-millisecond latency</p>
+
+      <!-- 8.5 Social Login & Registration -->
+      <h3><span class="subsection-num">8.5</span> Social Login &amp; Registration Strategy</h3>
+
+      <p>
+        Social login reduces registration friction significantly — students sign up with one click
+        instead of filling out a form. The Student Hub supports <strong>three social providers</strong>
+        at launch, with more available via Clerk's dashboard (no code changes needed).
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Provider</th>
+            <th>Priority</th>
+            <th>Rationale</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Google</strong></td>
+            <td>Primary</td>
+            <td>~80% of social signups in education platforms; ubiquitous among students (Gmail, Google Workspace)</td>
+          </tr>
+          <tr>
+            <td><strong>Apple</strong></td>
+            <td>Secondary</td>
+            <td>Required for App Store if mobile app is added; preferred by privacy-conscious users</td>
+          </tr>
+          <tr>
+            <td><strong>Email + password</strong></td>
+            <td>Fallback</td>
+            <td>Required for users who don't use or trust social login; Clerk handles password hashing (bcrypt), reset flow, and email verification</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Account Linking</div>
+        <p style="margin-bottom:0;">
+          Clerk automatically handles account linking: if a student signs up with Google
+          (<code>student@gmail.com</code>) and later tries to sign in with email/password using
+          the same address, Clerk detects the match and links the accounts. The student gets
+          one identity regardless of how they authenticate. This is configured in Clerk's dashboard
+          under "Account Linking" — no application code required.
+        </p>
+      </div>
+
+      <!-- 8.6 Webhook Integration -->
+      <h3><span class="subsection-num">8.6</span> Clerk Webhook Integration</h3>
+
+      <p>
+        When a student registers, Clerk is the source of truth for identity, but the Student Hub
+        needs to know about users for database relationships (enrollments, reviews, etc.). Clerk
+        webhooks provide this bridge.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Clerk Webhook — User Lifecycle Sync
+  ──────────────────────────────────────
+
+  ┌───────────┐  user.created    ┌──────────────────────────────────────────┐
+  │           │─────────────────▶│  /api/webhooks/clerk                     │
+  │   Clerk   │                  │                                          │
+  │           │  user.updated    │  1. Verify Svix signature (HMAC)         │
+  │           │─────────────────▶│  2. Parse event type                     │
+  │           │                  │  3. Switch on event:                     │
+  │           │  user.deleted    │                                          │
+  │           │─────────────────▶│     user.created:                        │
+  └───────────┘                  │       → No-op (user is Clerk-managed)    │
+                                 │       → Optionally store metadata in     │
+                                 │         local DB for denormalized reads  │
+                                 │                                          │
+                                 │     user.updated:                        │
+                                 │       → Sync display name, avatar URL    │
+                                 │         to local cache (if cached)       │
+                                 │                                          │
+                                 │     user.deleted:                        │
+                                 │       → Soft-delete local data           │
+                                 │       → Cancel active enrollments        │
+                                 │       → Anonymize reviews                │
+                                 └──────────────────────────────────────────┘
+
+  Webhook security:
+  • Signed with Svix (Clerk's webhook infrastructure)
+  • Verified via HMAC-SHA256 using webhook signing secret
+  • Replay protection via timestamp + message ID
+  • Retry on failure (exponential backoff, max 3 days)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 8.4 — Clerk webhooks: user lifecycle events sync identity data to the Student Hub's local database</p>
+
+      <!-- 8.7 GraphQL Auth Context -->
+      <h3><span class="subsection-num">8.7</span> GraphQL Auth Context</h3>
+
+      <p>
+        The GraphQL API receives auth state from Clerk via the request context. This is set up
+        once in the Yoga server configuration and is available to every resolver via
+        <code>ctx.userId</code>.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Auth Context — From Cookie to Resolver
+  ─────────────────────────────────────────
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  GraphQL Yoga Server Setup (server/yoga.ts)                       │
+  │                                                                    │
+  │  const yoga = createYoga({                                        │
+  │    schema,                                                         │
+  │    context: async ({ request }) =&gt; {                             │
+  │      const { userId, sessionClaims } = await getAuth(request);    │
+  │                                                                    │
+  │      return {                                                      │
+  │        userId,           // string | null (null = anonymous)       │
+  │        sessionClaims,    // { email, name, role, ... } | null     │
+  │        db,               // Drizzle instance                      │
+  │        loaders: createLoaders(db),  // DataLoaders (per-request)  │
+  │      };                                                            │
+  │    },                                                              │
+  │  });                                                               │
+  └────────────────────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Pothos Auth Scope Definition (server/schema/builder.ts)          │
+  │                                                                    │
+  │  const builder = new SchemaBuilder&lt;{                             │
+  │    Context: GraphQLContext;                                        │
+  │    AuthScopes: {                                                   │
+  │      $public: boolean;                                             │
+  │      $authenticated: boolean;                                      │
+  │    };                                                              │
+  │  }&gt;({                                                            │
+  │    authScopes: (ctx) =&gt; ({                                      │
+  │      $public: true,                                                │
+  │      $authenticated: !!ctx.userId,                                 │
+  │    }),                                                             │
+  │  });                                                               │
+  └────────────────────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────────────────┐
+  │  Usage in Resolver                                                 │
+  │                                                                    │
+  │  builder.queryField('myEnrollments', (t) =&gt;                     │
+  │    t.field({                                                       │
+  │      type: [EnrollmentType],                                       │
+  │      authScopes: { $authenticated: true },  // ← enforced by      │
+  │      resolve: (_, __, ctx) =&gt; {             //   Pothos plugin   │
+  │        // ctx.userId is guaranteed non-null here                   │
+  │        return enrollmentService.listByStudent(ctx.userId);         │
+  │      },                                                            │
+  │    }),                                                             │
+  │  );                                                                │
+  └────────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 8.5 — Auth context: Clerk session → GraphQL context → Pothos scope enforcement → resolver access</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Defense in Depth</div>
+        <p style="margin-bottom:0;">
+          Authentication is enforced at <strong>three layers</strong>: <strong>(1)</strong> Edge
+          middleware blocks unauthenticated access to protected pages (instant redirect).
+          <strong>(2)</strong> Pothos auth scopes reject unauthenticated GraphQL queries/mutations
+          at the resolver level (returns GraphQL error). <strong>(3)</strong> Service-layer ownership
+          checks ensure students can only access their own data (<code>WHERE student_id = ctx.userId</code>).
+          Bypassing one layer doesn't bypass the others — a compromised edge cache, for example,
+          cannot leak authenticated data because the resolver independently verifies identity.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 9–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
