@@ -5484,7 +5484,502 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 11–12: Placeholder for iterative dev -->
+    <!-- SECTION 11: Scalability                       -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s11">
+      <h2><span class="section-num">11</span> Scalability &amp; Performance</h2>
+
+      <p>
+        The Student Hub is designed to launch at <strong>10K monthly active students</strong> and
+        scale to <strong>100K+</strong> without architectural changes — only configuration tuning
+        and tier upgrades. Beyond 100K, specific components may need to be re-evaluated, but the
+        core architecture remains sound. This section documents the scaling characteristics of
+        each layer, the bottlenecks that will appear first, and the mitigation strategies for each.
+      </p>
+
+      <!-- 11.1 Scaling Dimensions -->
+      <h3><span class="subsection-num">11.1</span> Scaling Dimensions</h3>
+
+      <p>
+        Not all traffic is created equal. The Student Hub's workload has distinct scaling
+        dimensions that stress different parts of the system.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Dimension</th>
+            <th>Pattern</th>
+            <th>Scale Factor</th>
+            <th>Primary Bottleneck</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Catalog browsing</strong></td>
+            <td>Read-heavy, anonymous, cacheable</td>
+            <td>90% of all page views</td>
+            <td>Edge cache hit rate → Vercel CDN (effectively unlimited)</td>
+          </tr>
+          <tr>
+            <td><strong>Search queries</strong></td>
+            <td>Read-heavy, may be authenticated, typo-tolerant</td>
+            <td>~30% of active sessions</td>
+            <td>Meilisearch instance size → upgrade tier</td>
+          </tr>
+          <tr>
+            <td><strong>Course enrollment</strong></td>
+            <td>Write-heavy, authenticated, transactional</td>
+            <td>~1–2% conversion rate</td>
+            <td>PostgreSQL write throughput → Neon autoscaling</td>
+          </tr>
+          <tr>
+            <td><strong>Progress tracking</strong></td>
+            <td>Write-heavy, authenticated, high-frequency per user</td>
+            <td>~10 updates/session/student</td>
+            <td>PostgreSQL write throughput → batch/debounce at client</td>
+          </tr>
+          <tr>
+            <td><strong>Concurrent users</strong></td>
+            <td>Session count, auth validation</td>
+            <td>~5% of MAU at peak</td>
+            <td>Clerk session validation (edge, no server cost), connection pooling</td>
+          </tr>
+          <tr>
+            <td><strong>Webhook ingestion</strong></td>
+            <td>Write-heavy, external-triggered, bursty</td>
+            <td>Proportional to content changes + payments</td>
+            <td>Serverless function concurrency → Vercel limits (configurable)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 11.2 Layer-by-Layer Analysis -->
+      <h3><span class="subsection-num">11.2</span> Layer-by-Layer Scaling Analysis</h3>
+
+      <div class="diagram">
+        <pre>
+  Scaling Characteristics — By Layer
+  ────────────────────────────────────
+
+  Layer              10K MAU          100K MAU         1M MAU (future)
+  ─────              ───────          ────────         ───────────────
+  Edge/CDN           ✅ Free          ✅ Free          ✅ Free
+  (ISR pages)        (cache hits)     (cache hits)     (cache hits)
+
+  Edge Middleware     ✅ Free          ✅ Free          ✅ Free
+  (Clerk JWT)        (~1ms/req)       (~1ms/req)       (~1ms/req)
+
+  Serverless Fns     ✅ Baseline      ⚠️ Watch          🔧 Tune concurrency
+  (GraphQL API)      (~100 req/s)     (~1K req/s)      (~10K req/s)
+
+  Neon Postgres      ✅ Baseline      ⚠️ Scale compute   🔧 Read replicas
+  (0.25 CU)          (~500 QPS)       (1–2 CU)         (4+ CU + replicas)
+
+  Upstash Redis      ✅ Free tier     ✅ Pay-per-req    ✅ Pay-per-req
+                     (~10K cmd/day)   (~100K cmd/day)   (~1M cmd/day)
+
+  Meilisearch        ✅ Build tier    ⚠️ Growth tier     🔧 Enterprise
+                     (~50K docs)      (~500K docs)       (custom)
+
+  Clerk              ✅ Pro tier      ⚠️ Scale pricing   🔧 Enterprise
+                     (10K MAU incl)   ($0.02/MAU over)   (custom)
+
+  Legend: ✅ = no action needed  ⚠️ = monitor + tier upgrade  🔧 = architecture tuning
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 11.1 — Scaling roadmap: most layers need no changes until 100K+ MAU</p>
+
+      <!-- 11.3 Caching Strategy -->
+      <h3><span class="subsection-num">11.3</span> Caching Strategy</h3>
+
+      <p>
+        Caching is the primary scaling lever for the Student Hub. The read-heavy catalog workload
+        is ideal for aggressive caching at multiple layers.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Cache Hierarchy — Four Layers
+  ───────────────────────────────
+
+  Request: GET /courses/intro-to-design
+
+  Layer 1: Browser Cache
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Cache-Control: public, s-maxage=60, stale-while-revalidate│
+  │  Hit? → Serve from browser cache (0ms)                     │
+  │  Miss? → Continue to Layer 2                               │
+  └─────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+  Layer 2: Vercel Edge Cache (CDN)
+  ┌─────────────────────────────────────────────────────────────┐
+  │  ISR page cached at edge PoP closest to user               │
+  │  TTL: 60 seconds, then revalidate in background            │
+  │  Hit? → Serve from edge (~20ms globally)                   │
+  │  Miss? → Continue to Layer 3                               │
+  │                                                             │
+  │  Stale-while-revalidate:                                   │
+  │    Serve stale page immediately while re-generating in bg  │
+  │    User never waits for regeneration                       │
+  └─────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+  Layer 3: Upstash Redis (Application Cache)
+  ┌─────────────────────────────────────────────────────────────┐
+  │  GraphQL response fragments cached by query + variables    │
+  │  TTL: varies by data type:                                 │
+  │    • Catalog listings:  60s (matches ISR)                  │
+  │    • Course detail:     60s                                │
+  │    • Provider profile:  300s (changes infrequently)        │
+  │    • Search results:    30s (frequently changing)          │
+  │  Hit? → Return cached response (~5ms)                     │
+  │  Miss? → Continue to Layer 4                               │
+  └─────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+  Layer 4: Neon Postgres (Source of Truth)
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Full query execution with Drizzle ORM                     │
+  │  ~10–50ms depending on query complexity                    │
+  │  Result stored in Redis cache for subsequent requests      │
+  └─────────────────────────────────────────────────────────────┘
+
+  Cache Invalidation:
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Provider publishes/updates course:                        │
+  │    1. Webhook handler processes content update             │
+  │    2. Redis: delete matching cache keys (pattern match)    │
+  │    3. Vercel: revalidatePath('/courses/[slug]')            │
+  │    4. Meilisearch: update search index document            │
+  │                                                             │
+  │  Student purchases course:                                 │
+  │    1. Enrollment created in PostgreSQL                     │
+  │    2. Redis: bust enrollment count cache                   │
+  │    3. Vercel: revalidatePath('/courses/[slug]')            │
+  │       (enrollment count on detail page updated)            │
+  └─────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 11.2 — Four-layer cache hierarchy: browser → CDN edge → Redis → PostgreSQL, with event-driven invalidation</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Data</th>
+            <th>Cache Layer</th>
+            <th>TTL</th>
+            <th>Invalidation Trigger</th>
+            <th>Staleness Tolerance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Catalog listing pages</strong></td>
+            <td>ISR (Vercel edge)</td>
+            <td>60s</td>
+            <td><code>revalidatePath</code> on content webhook</td>
+            <td>High — a 60s delay in showing new courses is acceptable</td>
+          </tr>
+          <tr>
+            <td><strong>Course detail pages</strong></td>
+            <td>ISR (Vercel edge)</td>
+            <td>60s</td>
+            <td><code>revalidatePath</code> on content/enrollment webhook</td>
+            <td>High — description changes are infrequent</td>
+          </tr>
+          <tr>
+            <td><strong>Search results</strong></td>
+            <td>Meilisearch (built-in)</td>
+            <td>N/A (indexed)</td>
+            <td>Document upsert/delete via API</td>
+            <td>Medium — index sync lag of ~1–5s is acceptable</td>
+          </tr>
+          <tr>
+            <td><strong>Student enrollments</strong></td>
+            <td>Not cached (always fresh)</td>
+            <td>—</td>
+            <td>—</td>
+            <td>None — students must see purchases immediately</td>
+          </tr>
+          <tr>
+            <td><strong>Course progress</strong></td>
+            <td>Not cached (per-user writes)</td>
+            <td>—</td>
+            <td>—</td>
+            <td>None — progress must persist reliably</td>
+          </tr>
+          <tr>
+            <td><strong>Pricing</strong></td>
+            <td>Not cached (Stripe is source of truth)</td>
+            <td>—</td>
+            <td>—</td>
+            <td>None — stale prices are a revenue/trust risk</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 11.4 Connection Pooling -->
+      <h3><span class="subsection-num">11.4</span> Database Connection Pooling</h3>
+
+      <p>
+        Serverless functions create a new database connection on every cold start. Without pooling,
+        this quickly exhausts PostgreSQL's connection limit (default: 100). Neon provides a built-in
+        <strong>connection pooler</strong> (PgBouncer-compatible) that solves this.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Connection Pooling — Neon's Built-in Pooler
+  ──────────────────────────────────────────────
+
+  Without pooler (problem):
+  ┌──────────┐  ┌──────────┐  ┌──────────┐
+  │  Lambda  │  │  Lambda  │  │  Lambda  │  ← 50 concurrent functions
+  │  #1      │  │  #2      │  │  #50     │     = 50 direct connections
+  └────┬─────┘  └────┬─────┘  └────┬─────┘     → PostgreSQL overwhelmed
+       │              │              │
+       └──────────────┼──────────────┘
+                      ▼
+  ┌────────────────────────────┐
+  │  Neon PostgreSQL           │
+  │  max_connections = 100     │
+  │  50/100 used = 50% 😰     │
+  └────────────────────────────┘
+
+
+  With Neon pooler (solution):
+  ┌──────────┐  ┌──────────┐  ┌──────────┐
+  │  Lambda  │  │  Lambda  │  │  Lambda  │  ← 50 concurrent functions
+  │  #1      │  │  #2      │  │  #50     │     each uses pooled conn
+  └────┬─────┘  └────┬─────┘  └────┬─────┘
+       │              │              │
+       └──────────────┼──────────────┘
+                      ▼
+  ┌────────────────────────────┐
+  │  Neon Connection Pooler    │  ← PgBouncer-compatible
+  │  (transaction mode)        │     Multiplexes 50 app connections
+  │                            │     into ~10 Postgres connections
+  │  Connection string:        │
+  │  postgres://...@           │
+  │    ep-xxx.pooler.          │  ← Note: pooler subdomain
+  │    us-east-2.aws.neon.tech │
+  │    /studenthub             │
+  └────────────┬───────────────┘
+               ▼
+  ┌────────────────────────────┐
+  │  Neon PostgreSQL           │
+  │  10/100 connections used   │
+  │  = 10% 🎉                 │
+  └────────────────────────────┘
+
+  Key: use the pooler connection string (*.pooler.*.neon.tech)
+  for serverless workloads. Direct connections for migrations only.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 11.3 — Neon connection pooler: multiplexes serverless connections, preventing PostgreSQL connection exhaustion</p>
+
+      <!-- 11.5 Performance Budgets -->
+      <h3><span class="subsection-num">11.5</span> Performance Budgets</h3>
+
+      <p>
+        Every user-facing interaction has a performance budget. These budgets are monitored via
+        Vercel Analytics (Web Vitals) and Sentry (API latency). Budget violations trigger alerts.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Interaction</th>
+            <th>Budget</th>
+            <th>Target (p75)</th>
+            <th>How Achieved</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Catalog page load (LCP)</strong></td>
+            <td>&lt;1.5s</td>
+            <td>&lt;800ms</td>
+            <td>ISR + edge cache; images via next/image (WebP, lazy loading); minimal JS bundle</td>
+          </tr>
+          <tr>
+            <td><strong>Course detail page (LCP)</strong></td>
+            <td>&lt;1.5s</td>
+            <td>&lt;1s</td>
+            <td>ISR + edge cache; above-fold content server-rendered; reviews loaded client-side</td>
+          </tr>
+          <tr>
+            <td><strong>Search results</strong></td>
+            <td>&lt;200ms</td>
+            <td>&lt;100ms</td>
+            <td>Meilisearch's sub-50ms query time + minimal network overhead (same region)</td>
+          </tr>
+          <tr>
+            <td><strong>Dashboard page (LCP)</strong></td>
+            <td>&lt;2s</td>
+            <td>&lt;1.5s</td>
+            <td>Server Component data fetching (single round-trip); skeleton loading for secondary data</td>
+          </tr>
+          <tr>
+            <td><strong>Checkout initiation</strong></td>
+            <td>&lt;3s</td>
+            <td>&lt;2s</td>
+            <td>Stripe session creation (~1s) + redirect. Loading state shown immediately</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL query (p95)</strong></td>
+            <td>&lt;500ms</td>
+            <td>&lt;200ms</td>
+            <td>DataLoader batching, Redis caching, Neon in same region as Vercel functions</td>
+          </tr>
+          <tr>
+            <td><strong>GraphQL mutation (p95)</strong></td>
+            <td>&lt;1s</td>
+            <td>&lt;500ms</td>
+            <td>Direct PostgreSQL writes; cache invalidation is async (non-blocking)</td>
+          </tr>
+          <tr>
+            <td><strong>CLS (Cumulative Layout Shift)</strong></td>
+            <td>&lt;0.1</td>
+            <td>&lt;0.05</td>
+            <td>Reserved dimensions for images/cards; no late-injecting ads or banners</td>
+          </tr>
+          <tr>
+            <td><strong>INP (Interaction to Next Paint)</strong></td>
+            <td>&lt;200ms</td>
+            <td>&lt;100ms</td>
+            <td>Minimal client-side JS; React Server Components reduce hydration overhead</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <!-- 11.6 Bottleneck Playbook -->
+      <h3><span class="subsection-num">11.6</span> Bottleneck Playbook</h3>
+
+      <p>
+        When scaling limits are reached, the following playbook provides the mitigation strategy
+        for each bottleneck, in order of expected occurrence.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Bottleneck</th>
+            <th>Symptom</th>
+            <th>Trigger (~MAU)</th>
+            <th>Mitigation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>Neon compute</strong></td>
+            <td>Query latency increase; p95 &gt;500ms</td>
+            <td>~50K</td>
+            <td>Increase Neon compute units (0.25 → 1 → 4 CU). Auto-scaling handles spikes. ~2 min, no downtime</td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>Serverless concurrency</strong></td>
+            <td>429 errors from Vercel; cold start rate increases</td>
+            <td>~80K</td>
+            <td>Increase Vercel function concurrency limit. Consider edge runtime for GraphQL (no cold start). Enable Vercel's "Fluid Compute" for long-running functions</td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>Meilisearch capacity</strong></td>
+            <td>Search latency &gt;100ms; indexing lag &gt;10s</td>
+            <td>~100K</td>
+            <td>Upgrade Meilisearch Cloud tier. If catalog exceeds 1M documents, evaluate sharding or dedicated instance</td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>Database read throughput</strong></td>
+            <td>Read queries competing with writes; connection pool saturation</td>
+            <td>~200K</td>
+            <td>Add Neon read replicas. Route read-heavy queries (catalog, search aggregation) to replicas. Drizzle supports multiple connection targets</td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>GraphQL complexity</strong></td>
+            <td>Schema size makes query planning expensive; type generation slow</td>
+            <td>~500K</td>
+            <td>Enable Automatic Persisted Queries (APQ). Consider schema federation if the API surface grows beyond one team's ownership</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout callout-info">
+        <div class="callout-title">What Doesn't Scale (and Doesn't Need To)</div>
+        <p style="margin-bottom:0;">
+          Some operations are inherently low-volume and never become bottlenecks:
+          <strong>Webhook ingestion</strong> (proportional to content changes and payments, not
+          page views — at most ~1K/day at 100K MAU),
+          <strong>Clerk auth</strong> (edge JWT verification has zero backend cost — scales
+          infinitely), and
+          <strong>Stripe checkout</strong> (~1–2% conversion rate means ~1–2K checkouts/day at
+          100K MAU — Stripe handles billions).
+        </p>
+      </div>
+
+      <!-- 11.7 Load Profile -->
+      <h3><span class="subsection-num">11.7</span> Projected Load Profile</h3>
+
+      <div class="diagram">
+        <pre>
+  Traffic Estimation — 100K MAU
+  ───────────────────────────────
+
+  Monthly active students:          100,000
+  Daily active students (10%):       10,000
+  Peak concurrent (5% of daily):        500
+
+  Per-session metrics (average):
+    Page views:                           8
+    Search queries:                       3
+    GraphQL API calls:                   12    (includes prefetch, polling)
+    Mutations:                            1    (progress update, review, purchase)
+
+  Daily totals:
+    Page views:            80,000 / day   →  90% served from ISR cache
+    Search queries:        30,000 / day   →  Meilisearch handles easily
+    GraphQL queries:      120,000 / day   →  ~60% cached in Redis
+    Mutations:             10,000 / day   →  Direct to PostgreSQL
+    Webhooks (inbound):     1,000 / day   →  Content sync + payments
+
+  Peak hour (2× average):
+    Page views:             ~700 / min    →  Edge CDN (no server load)
+    GraphQL queries:       ~1,000 / min   →  ~16 req/s to serverless
+    Mutations:              ~100 / min    →  ~1.7 req/s to PostgreSQL
+    Effective DB queries:   ~200 / min    →  ~3.3 QPS (after cache hits)
+
+  Conclusion: At 100K MAU, the system operates well within limits
+  of the managed service tiers. No architectural changes required.
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 11.4 — Traffic projection: 100K MAU produces modest load after caching layers absorb read traffic</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Scaling Philosophy</div>
+        <p style="margin-bottom:0;">
+          The Student Hub's scaling approach is <strong>"optimize reads, accept writes"</strong>.
+          Read traffic (catalog, search) is 50–100× higher than write traffic (enrollment, progress)
+          and is fully absorable by caching layers. Write traffic at marketplace scale is
+          surprisingly modest — even at 100K MAU, the database sees only ~3 QPS of actual write
+          queries. The architecture's bottleneck is designed to be the database (the component with
+          the most linear scaling options), not the application layer. When the database eventually
+          becomes the bottleneck, Neon's autoscaling, read replicas, and connection pooling provide
+          a graduated scaling path without application code changes.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 12: Placeholder for iterative dev    -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
