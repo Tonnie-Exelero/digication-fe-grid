@@ -708,7 +708,7 @@
                                            │
                                            ▼
  ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
- │                               FRONTEND (Next.js 15 App Router)                              │
+ │                               FRONTEND (Next.js 16 App Router)                              │
  │                                                                                              │
  │   ┌──────────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐              │
  │   │  SSG Pages           │  │  SSR Pages           │  │  Client Components   │              │
@@ -980,7 +980,7 @@
         <tbody>
           <tr>
             <td><strong>Frontend Framework</strong></td>
-            <td><span class="tech-badge">Next.js 15</span> <span class="tech-badge">React 19</span></td>
+            <td><span class="tech-badge">Next.js 16</span> <span class="tech-badge">React 19</span></td>
             <td>SSR/SSG/ISR hybrid rendering, React Server Components, App Router</td>
           </tr>
           <tr>
@@ -1125,10 +1125,10 @@
       </p>
 
       <!-- 4.1 Framework Selection -->
-      <h3><span class="subsection-num">4.1</span> Framework: Next.js 15 + React 19</h3>
+      <h3><span class="subsection-num">4.1</span> Framework: Next.js 16 + React 19</h3>
 
       <p>
-        Next.js 15 with the App Router is the foundation of the Student Hub frontend. This is not a
+        Next.js 16 with the App Router is the foundation of the Student Hub frontend. This is not a
         default choice — it's a deliberate selection driven by four requirements that eliminate most
         alternatives:
       </p>
@@ -1138,7 +1138,7 @@
           <tr>
             <th>Requirement</th>
             <th>Why It Matters</th>
-            <th>How Next.js 15 Delivers</th>
+            <th>How Next.js 16 Delivers</th>
           </tr>
         </thead>
         <tbody>
@@ -4888,7 +4888,7 @@
   │   │  • SSR pages         │  │  • /api/graphql      │                    │
   │   │  • Server Components │  │  • /api/webhooks/*   │                    │
   │   │  • Route Handlers    │  │                      │                    │
-  │   │                      │  │  Runtime: Node.js 20 │                    │
+  │   │                      │  │  Runtime: Node.js 22 │                    │
   │   │  Cold start: ~200ms  │  │  Max duration: 10s   │                    │
   │   │  (mitigated by ISR)  │  │  Memory: 1024 MB     │                    │
   │   └──────────────────────┘  └──────────────────────┘                    │
@@ -6006,9 +6006,9 @@
         <tbody>
           <tr>
             <td><strong>Frontend framework</strong></td>
-            <td>Next.js 14+ (App Router)</td>
+            <td>Next.js 16 (App Router)</td>
             <td>Remix, Astro, SvelteKit</td>
-            <td>ISR for catalog SEO, React Server Components for data-heavy pages, Vercel integration, team familiarity with React</td>
+            <td>ISR for catalog SEO, React Server Components for data-heavy pages, Turbopack stable, Vercel integration, team familiarity with React</td>
             <td>§4</td>
           </tr>
           <tr>
@@ -6316,7 +6316,7 @@
 
   STACK
   ─────
-  Frontend:    Next.js 14+ (App Router) + React Server Components + Tailwind + urql
+  Frontend:    Next.js 16 (App Router) + React Server Components + Tailwind + urql
   API:         GraphQL Yoga + Pothos (code-first) + Zod validation
   Database:    Neon Postgres + Drizzle ORM
   Cache:       Upstash Redis (edge-compatible)
