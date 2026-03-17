@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Student Hub — Technical Architecture Document</title>
+  <style>
+    :root {
+      --color-bg: #fafafa;
+      --color-surface: #ffffff;
+      --color-text: #1a1a2e;
+      --color-text-secondary: #4a4a6a;
+      --color-accent: #4f46e5;
+      --color-accent-light: #e0e7ff;
+      --color-border: #e2e8f0;
+      --color-code-bg: #f1f5f9;
+      --color-success: #059669;
+      --color-warning: #d97706;
+      --color-info: #0284c7;
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+      --max-width: 920px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--color-bg);
+      color: var(--color-text);
+      line-height: 1.7;
+      font-size: 16px;
+    }
+
+    /* ── Header / Cover ── */
+    .cover {
+      background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 50%, #2563eb 100%);
+      color: #fff;
+      padding: 80px 40px 60px;
+      text-align: center;
+    }
+    .cover h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+    .cover .subtitle {
+      font-size: 1.25rem;
+      opacity: 0.9;
+      font-weight: 400;
+      margin-bottom: 24px;
+    }
+    .cover .meta {
+      font-size: 0.9rem;
+      opacity: 0.7;
+    }
+    .cover .meta span + span::before {
+      content: '  ·  ';
+    }
+
+    /* ── Navigation / TOC ── */
+    .toc-container {
+      background: var(--color-surface);
+      border-bottom: 1px solid var(--color-border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+    .toc {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 16px 40px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .toc a {
+      font-size: 0.78rem;
+      color: var(--color-text-secondary);
+      text-decoration: none;
+      padding: 4px 10px;
+      border-radius: 6px;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+    .toc a:hover {
+      background: var(--color-accent-light);
+      color: var(--color-accent);
+    }
+
+    /* ── Main Content ── */
+    .content {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 40px 40px 120px;
+    }
+
+    /* ── Sections ── */
+    section {
+      margin-bottom: 64px;
+    }
+    section h2 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      color: var(--color-accent);
+      margin-bottom: 8px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid var(--color-accent-light);
+      letter-spacing: -0.01em;
+    }
+    section h2 .section-num {
+      color: var(--color-text-secondary);
+      font-weight: 400;
+      font-size: 1.1rem;
+      margin-right: 8px;
+    }
+    section h3 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-top: 36px;
+      margin-bottom: 12px;
+      color: var(--color-text);
+    }
+    section h3 .subsection-num {
+      color: var(--color-text-secondary);
+      font-weight: 400;
+      font-size: 0.95rem;
+      margin-right: 6px;
+    }
+
+    p {
+      margin-bottom: 16px;
+      color: var(--color-text-secondary);
+    }
+    p strong {
+      color: var(--color-text);
+    }
+
+    ul, ol {
+      margin-bottom: 16px;
+      padding-left: 24px;
+      color: var(--color-text-secondary);
+    }
+    li {
+      margin-bottom: 6px;
+    }
+    li strong {
+      color: var(--color-text);
+    }
+
+    /* ── Callout Boxes ── */
+    .callout {
+      border-radius: 10px;
+      padding: 20px 24px;
+      margin: 24px 0;
+      font-size: 0.92rem;
+    }
+    .callout-info {
+      background: #eff6ff;
+      border-left: 4px solid var(--color-info);
+    }
+    .callout-success {
+      background: #ecfdf5;
+      border-left: 4px solid var(--color-success);
+    }
+    .callout-warning {
+      background: #fffbeb;
+      border-left: 4px solid var(--color-warning);
+    }
+    .callout .callout-title {
+      font-weight: 700;
+      color: var(--color-text);
+      margin-bottom: 6px;
+    }
+
+    /* ── Diagram Container ── */
+    .diagram {
+      background: var(--color-code-bg);
+      border: 1px solid var(--color-border);
+      border-radius: 10px;
+      padding: 24px;
+      margin: 24px 0;
+      overflow-x: auto;
+    }
+    .diagram pre {
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      line-height: 1.6;
+      color: var(--color-text);
+      white-space: pre;
+      margin: 0;
+    }
+    .diagram-caption {
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--color-text-secondary);
+      font-style: italic;
+      margin-top: 8px;
+    }
+
+    /* ── Tables ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+      font-size: 0.92rem;
+    }
+    thead th {
+      background: var(--color-accent);
+      color: #fff;
+      font-weight: 600;
+      padding: 12px 16px;
+      text-align: left;
+    }
+    thead th:first-child { border-radius: 8px 0 0 0; }
+    thead th:last-child { border-radius: 0 8px 0 0; }
+    tbody td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
+    }
+    tbody tr:hover {
+      background: var(--color-accent-light);
+    }
+    tbody td strong {
+      color: var(--color-text);
+    }
+
+    /* ── Code Inline ── */
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.88em;
+      background: var(--color-code-bg);
+      padding: 2px 7px;
+      border-radius: 5px;
+      color: var(--color-accent);
+    }
+
+    /* ── Tech Badge ── */
+    .tech-badge {
+      display: inline-block;
+      background: var(--color-accent-light);
+      color: var(--color-accent);
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 20px;
+      margin: 2px 4px 2px 0;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 768px) {
+      .cover { padding: 50px 24px 40px; }
+      .cover h1 { font-size: 2rem; }
+      .content { padding: 24px 20px 80px; }
+      .toc { padding: 12px 20px; }
+    }
+
+    /* ── Print ── */
+    @media print {
+      .toc-container { position: static; box-shadow: none; }
+      .cover { background: #4f46e5 !important; -webkit-print-color-adjust: exact; }
+      section { page-break-inside: avoid; }
+    }
+  </style>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+</head>
+<body>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- COVER                                            -->
+  <!-- ════════════════════════════════════════════════ -->
+  <header class="cover">
+    <h1>Student Hub</h1>
+    <p class="subtitle">Technical Architecture Document — Courses &amp; Skills Marketplace</p>
+    <p class="meta">
+      <span>v1.0 Draft</span>
+      <span>March 2026</span>
+      <span>Confidential</span>
+    </p>
+  </header>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- TABLE OF CONTENTS (sticky nav)                   -->
+  <!-- ════════════════════════════════════════════════ -->
+  <nav class="toc-container">
+    <div class="toc">
+      <a href="#s1">1. Executive Summary</a>
+      <a href="#s2">2. Requirements</a>
+      <a href="#s3">3. High-Level Architecture</a>
+      <a href="#s4">4. Frontend Architecture</a>
+      <a href="#s5">5. BFF Layer</a>
+      <a href="#s6">6. Backend Services</a>
+      <a href="#s7">7. Data Architecture</a>
+      <a href="#s8">8. Authentication</a>
+      <a href="#s9">9. Security</a>
+      <a href="#s10">10. Infrastructure</a>
+      <a href="#s11">11. Scalability</a>
+      <a href="#s12">12. Decision Matrix</a>
+    </div>
+  </nav>
+
+  <!-- ════════════════════════════════════════════════ -->
+  <!-- MAIN CONTENT                                     -->
+  <!-- ════════════════════════════════════════════════ -->
+  <main class="content">
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 1: Executive Summary                  -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s1">
+      <h2><span class="section-num">01</span> Executive Summary</h2>
+
+      <p>
+        The <strong>Student Hub</strong> is a new consumer-facing web application that serves as a
+        <strong>courses and skills marketplace</strong> — a platform where students discover, purchase,
+        and consume short-form upskilling courses (ranging from a few hours to a few weeks). Think of it
+        as a purpose-built Udemy-style marketplace, tightly integrated with our existing
+        <strong>Provider Marketing Hub</strong> where learning institutions already publish and manage
+        their course catalogs.
+      </p>
+
+      <p>
+        While the Provider Marketing Hub serves hundreds to a few thousand institutional users and is
+        built on <strong>React, TypeScript, GraphQL, and Supabase</strong>, the Student Hub must be
+        architected for a fundamentally different scale: <strong>millions of concurrent student users</strong>.
+        This difference in scale — along with different usage patterns (high-read catalog browsing,
+        bursty purchase traffic, interactive content consumption) — justifies a purpose-built architecture
+        rather than extending the existing provider-side stack.
+      </p>
+
+      <h3>Key Architectural Decisions</h3>
+      <ul>
+        <li><strong>Separate system, shared course data</strong> — Student profiles, enrollments, progress,
+          and transactions live in a dedicated database. Course catalog data is synced from the existing
+          Supabase instance (read-only from the Student Hub's perspective).</li>
+        <li><strong>Edge-first, SSR/SSG hybrid frontend</strong> — The catalog (the most-visited surface)
+          is statically generated and served from the edge for sub-second load times worldwide. Personalized
+          pages use server-side rendering.</li>
+        <li><strong>Separate authentication system</strong> — Students authenticate through a dedicated
+          auth provider, decoupled from the Supabase Auth used by providers.</li>
+        <li><strong>Stripe-powered commerce</strong> — All financial transactions route through Stripe,
+          keeping payment data off our servers entirely (PCI SAQ-A compliance).</li>
+        <li><strong>English-first, i18n-ready</strong> — Launching in English with the architecture
+          wired for future localization without rewrites.</li>
+      </ul>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Relationship to Provider Marketing Hub</div>
+        <p style="margin-bottom:0;">
+          The Student Hub is a <strong>consumer</strong> of course data published through the Provider
+          Marketing Hub. Providers continue to manage courses, pricing, and content through their
+          existing dashboard. The Student Hub reads this data via a synchronization layer — it never
+          writes back to the provider-side Supabase instance.
+        </p>
+      </div>
+
+      <h3>Scale &amp; Performance Targets</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Target</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Registered students</strong></td>
+            <td>Millions (architecture should support 10M+ accounts)</td>
+          </tr>
+          <tr>
+            <td><strong>Concurrent browsing users</strong></td>
+            <td>100K+ during peak</td>
+          </tr>
+          <tr>
+            <td><strong>Catalog page load (LCP)</strong></td>
+            <td>&lt; 1.2 seconds (P75)</td>
+          </tr>
+          <tr>
+            <td><strong>Time to Interactive</strong></td>
+            <td>&lt; 2.0 seconds on 4G</td>
+          </tr>
+          <tr>
+            <td><strong>API response time (P95)</strong></td>
+            <td>&lt; 200ms</td>
+          </tr>
+          <tr>
+            <td><strong>Checkout completion</strong></td>
+            <td>99.9% availability (zero lost transactions)</td>
+          </tr>
+          <tr>
+            <td><strong>Uptime SLA</strong></td>
+            <td>99.95%</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 2–12: Placeholder for iterative dev  -->
+    <!-- ──────────────────────────────────────────── -->
+
+  </main>
+
+</body>
+</html>
