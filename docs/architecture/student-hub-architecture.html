@@ -2242,7 +2242,596 @@
     </section>
 
     <!-- ──────────────────────────────────────────── -->
-    <!-- SECTION 6–12: Placeholder for iterative dev  -->
+    <!-- SECTION 6: Backend Services                   -->
+    <!-- ──────────────────────────────────────────── -->
+    <section id="s6">
+      <h2><span class="section-num">06</span> Backend Services</h2>
+
+      <p>
+        The Student Hub's backend is not a monolithic server — it's a set of <strong>serverless
+        functions</strong> deployed on Vercel, organized as tRPC procedure handlers (Section 5) and
+        dedicated service modules. Each service owns a bounded context, communicates via typed
+        function calls (not HTTP between services), and has clear input/output contracts. This
+        section details the five core backend services and their internal architecture.
+      </p>
+
+      <!-- 6.1 Service Map -->
+      <h3><span class="subsection-num">6.1</span> Service Map &amp; Boundaries</h3>
+
+      <div class="diagram">
+        <pre>
+  Backend Service Map
+  ────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────────────┐
+  │                         tRPC Procedure Handlers                        │
+  │               (thin layer — validates input, calls services)            │
+  └──────┬──────────┬──────────┬──────────┬──────────┬─────────────────────┘
+         │          │          │          │          │
+         ▼          ▼          ▼          ▼          ▼
+  ┌───────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌──────────────┐
+  │  Catalog   │ │Payment │ │Enroll- │ │ Search │ │ Notification │
+  │  Service   │ │Service │ │ment    │ │Service │ │   Service    │
+  │            │ │        │ │Service │ │        │ │              │
+  │ • list     │ │• create│ │• enroll│ │• index │ │ • create     │
+  │ • getBy    │ │  check-│ │• track │ │• query │ │ • list       │
+  │   Slug     │ │  out   │ │  prog- │ │• facets│ │ • markRead   │
+  │ • sync     │ │• verify│ │  ress  │ │• auto- │ │ • send email │
+  │   from     │ │  web-  │ │• cert- │ │  comp- │ │   (via       │
+  │   provider │ │  hook  │ │  ific- │ │  lete  │ │    Resend)   │
+  │            │ │• promo │ │  ate   │ │        │ │              │
+  └──────┬─────┘ └───┬────┘ └───┬────┘ └───┬────┘ └──────┬───────┘
+         │          │          │          │              │
+         ▼          ▼          ▼          ▼              ▼
+  ┌───────────────────────────────────────────────────────────────────────┐
+  │                        Data Access Layer (Drizzle ORM)                │
+  │         Typed queries, transactions, connection pooling via Neon      │
+  └───────────────────────────────────────────────────────────────────────┘
+         │          │                     │
+         ▼          ▼                     ▼
+    ┌─────────┐ ┌─────────┐         ┌──────────┐
+    │  Neon   │ │ Upstash │         │  Meili-  │
+    │Postgres │ │  Redis  │         │  search  │
+    └─────────┘ └─────────┘         └──────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.1 — Backend service map: five services behind tRPC handlers, unified by a shared data access layer</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Why Not Microservices?</div>
+        <p style="margin-bottom:0;">
+          These "services" are <strong>module boundaries</strong>, not separately deployed
+          microservices. They live in the same codebase, deploy in the same Vercel project, and
+          call each other via TypeScript imports — not HTTP. This gives the organizational benefits
+          of service-oriented architecture (clear ownership, testability, separation of concerns)
+          without the operational cost of distributed systems (service discovery, network latency
+          between services, distributed tracing complexity). If a service needs independent scaling
+          in the future, it can be extracted into a standalone Vercel function or a separate
+          deployment — but premature extraction would add complexity with no current benefit.
+        </p>
+      </div>
+
+      <!-- 6.2 Catalog Service -->
+      <h3><span class="subsection-num">6.2</span> Catalog Service</h3>
+
+      <p>
+        The Catalog Service is the read-heavy core of the platform. It manages the local copy of
+        course data synced from the Provider Hub (Supabase) and serves it to the frontend via
+        ISR-cached queries.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Responsibility</th>
+            <th>Implementation</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Course listing &amp; filtering</strong></td>
+            <td>
+              Paginated queries against <code>catalog_courses</code> in Neon Postgres. Filters
+              (category, price range, skill level, provider) are applied as SQL <code>WHERE</code>
+              clauses via Drizzle's query builder. Results cached in Redis for 60 seconds.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Course detail retrieval</strong></td>
+            <td>
+              Single-course fetch by slug, joining modules, lessons (metadata only — not content),
+              provider info, and aggregate review stats. Used by ISR to pre-render detail pages.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Course sync from Provider Hub</strong></td>
+            <td>
+              Listens to Supabase Realtime events on the provider's <code>courses</code> table.
+              On change: fetches full course data, transforms the schema to the Student Hub's
+              local model, and upserts into <code>catalog_courses</code> + Meilisearch index.
+              Idempotent using <code>updated_at</code> as a version key.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Featured courses</strong></td>
+            <td>
+              Curated list managed via a <code>featured_courses</code> table with position ordering.
+              Updated by providers or admins; served to the homepage with aggressive caching (5-minute ISR).
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Catalog Service — Sync Flow Detail
+  ────────────────────────────────────
+
+  Supabase Realtime                  Catalog Service                    Local Stores
+       │                                    │                               │
+       │  Event: INSERT/UPDATE on           │                               │
+       │  provider.courses                  │                               │
+       │───────────────────────────────────▶│                               │
+       │                                    │                               │
+       │                                    │  1. Check version:            │
+       │                                    │     Is event.updated_at       │
+       │                                    │     > local.updated_at ?      │
+       │                                    │     ├── NO → Skip (already    │
+       │                                    │     │        processed)        │
+       │                                    │     └── YES → Continue        │
+       │                                    │                               │
+       │  2. Fetch full course +            │                               │
+       │     modules + lessons              │                               │
+       │◀───────────────────────────────────│                               │
+       │───────────────────────────────────▶│                               │
+       │                                    │                               │
+       │                                    │  3. Transform:                │
+       │                                    │     provider schema →         │
+       │                                    │     student hub schema        │
+       │                                    │                               │
+       │                                    │  4. Transaction:              │
+       │                                    │  ┌────────────────────────┐   │
+       │                                    │  │ BEGIN                  │   │
+       │                                    │  │  UPSERT catalog_      │──▶│ Postgres
+       │                                    │  │    courses             │   │
+       │                                    │  │  UPSERT catalog_      │──▶│ Postgres
+       │                                    │  │    modules             │   │
+       │                                    │  │  UPSERT catalog_      │──▶│ Postgres
+       │                                    │  │    lessons             │   │
+       │                                    │  │ COMMIT                 │   │
+       │                                    │  └────────────────────────┘   │
+       │                                    │                               │
+       │                                    │  5. Update search index  ────▶│ Meilisearch
+       │                                    │  6. Bust Redis cache     ────▶│ Redis
+       │                                    │  7. Trigger ISR revalidation  │ Vercel
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.2 — Catalog sync: idempotent, transactional upsert from Provider Hub to local stores</p>
+
+      <!-- 6.3 Payment Service -->
+      <h3><span class="subsection-num">6.3</span> Payment Service</h3>
+
+      <p>
+        The Payment Service handles the most critical flow in the application — taking money from
+        students. It is designed with a <strong>zero-trust, idempotent, webhook-first</strong>
+        approach: the client never learns the payment outcome from the redirect — only from the
+        server, after Stripe's webhook has been cryptographically verified.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Payment Service — Internal Architecture
+  ─────────────────────────────────────────
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  Payment Service                                                     │
+  │                                                                      │
+  │  ┌──────────────────────┐    ┌──────────────────────────────────┐   │
+  │  │ createCheckoutSession │    │ handleWebhook                    │   │
+  │  │                      │    │                                   │   │
+  │  │ 1. Verify student    │    │ 1. Verify Stripe signature       │   │
+  │  │    is authenticated  │    │    (HMAC-SHA256)                  │   │
+  │  │                      │    │                                   │   │
+  │  │ 2. Fetch course from │    │ 2. Extract idempotency key       │   │
+  │  │    catalog (verify   │    │    (payment_intent.id)            │   │
+  │  │    it exists + price)│    │                                   │   │
+  │  │                      │    │ 3. Check: already processed?      │   │
+  │  │ 3. Apply promo code  │    │    SELECT FROM transactions      │   │
+  │  │    if provided       │    │    WHERE stripe_pi_id = ?         │   │
+  │  │    (verify in DB)    │    │    ├── YES → Return 200 (skip)   │   │
+  │  │                      │    │    └── NO  → Continue             │   │
+  │  │ 4. Create Stripe     │    │                                   │   │
+  │  │    Checkout Session  │    │ 4. Transaction:                   │   │
+  │  │    with metadata:    │    │    BEGIN                          │   │
+  │  │    { studentId,      │    │      INSERT enrollment            │   │
+  │  │      courseId,       │    │      INSERT transaction            │   │
+  │  │      promoCodeId }   │    │    COMMIT                         │   │
+  │  │                      │    │                                   │   │
+  │  │ 5. Return session    │    │ 5. Bust catalog cache             │   │
+  │  │    URL → redirect    │    │    (enrollment count changed)     │   │
+  │  │                      │    │                                   │   │
+  │  │                      │    │ 6. Send confirmation email        │   │
+  │  │                      │    │    (Resend, async — non-blocking) │   │
+  │  └──────────────────────┘    └──────────────────────────────────┘   │
+  │                                                                      │
+  │  ┌──────────────────────┐                                           │
+  │  │ verifyPromoCode      │                                           │
+  │  │                      │                                           │
+  │  │ • Check code exists  │                                           │
+  │  │ • Check expiry date  │                                           │
+  │  │ • Check usage limit  │                                           │
+  │  │ • Return discount %  │                                           │
+  │  │   or flat amount     │                                           │
+  │  └──────────────────────┘                                           │
+  └──────────────────────────────────────────────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.3 — Payment service internals: checkout creation, webhook processing, and promo code verification</p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">Idempotency Is Non-Negotiable</div>
+        <p style="margin-bottom:0;">
+          Stripe may deliver the same webhook event multiple times (at-least-once delivery). Without
+          idempotency, a student could be enrolled twice or charged twice. The
+          <code>payment_intent.id</code> serves as the idempotency key: before processing, the webhook
+          handler checks if a transaction with that ID already exists. If it does, the handler returns
+          <code>200 OK</code> immediately — Stripe stops retrying, and no duplicate work occurs. This
+          check-then-insert is wrapped in a serializable database transaction to prevent race conditions
+          from concurrent webhook deliveries.
+        </p>
+      </div>
+
+      <!-- 6.4 Enrollment Service -->
+      <h3><span class="subsection-num">6.4</span> Enrollment Service</h3>
+
+      <p>
+        The Enrollment Service manages the post-purchase student experience: enrollment records,
+        lesson-by-lesson progress tracking, and certificate generation upon course completion.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Operation</th>
+            <th>Type</th>
+            <th>Implementation Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Create enrollment</strong></td>
+            <td>Internal (called by Payment Service)</td>
+            <td>
+              Inserts into <code>enrollments</code> table with <code>status: 'active'</code>,
+              <code>enrolled_at: now()</code>, and initializes a <code>progress</code> JSONB
+              column with all lesson IDs set to <code>incomplete</code>.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>List enrollments</strong></td>
+            <td>Query (protected)</td>
+            <td>
+              Returns all enrollments for the authenticated student, joined with course metadata
+              (title, thumbnail, provider) and computed progress percentage. Sorted by
+              <code>last_accessed_at</code> descending.
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Update progress</strong></td>
+            <td>Mutation (rate-limited)</td>
+            <td>
+              Accepts <code>{ enrollmentId, lessonId, status, position? }</code>. Updates the
+              JSONB progress field for the specific lesson. If all required lessons are now
+              complete, triggers certificate generation. Debounced on the client (30-second
+              auto-save interval).
+            </td>
+          </tr>
+          <tr>
+            <td><strong>Generate certificate</strong></td>
+            <td>Internal (triggered by progress completion)</td>
+            <td>
+              Generates a PDF certificate using <code>@react-pdf/renderer</code> with the
+              student's name, course title, completion date, and a unique verification URL.
+              Stored in Vercel Blob storage; URL saved to the enrollment record.
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Progress Tracking — Optimistic Update Flow
+  ────────────────────────────────────────────
+
+  Student clicks                  Client (TanStack Query)              Server (tRPC)
+  "Mark Complete"
+       │
+       │  1. Optimistic update:
+       │     Cache updated instantly
+       │     (lesson shown as ✓)
+       │────────────────────────────▶ queryClient.setQueryData(
+       │                              ['enrollment', id],
+       │                              optimisticallyUpdated
+       │                             )
+       │
+       │  2. Mutation fires                                    3. Validate + persist
+       │     (background)           ─────────────────────────▶ UPDATE enrollments
+       │                                                       SET progress = jsonb_set(...)
+       │                                                       WHERE id = ? AND student_id = ?
+       │                                                       │
+       │                                                       4. Check: all lessons complete?
+       │                                                       ├── YES → Generate certificate
+       │                                                       │         Return { completed: true }
+       │                                                       └── NO  → Return { completed: false }
+       │                            ◀─────────────────────────
+       │  5. On success: cache
+       │     revalidated with
+       │     server truth
+       │
+       │  On error: rollback
+       │  optimistic update,
+       │  show retry toast
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.4 — Progress tracking: optimistic update for instant feedback, server validates and persists</p>
+
+      <!-- 6.5 Search Service -->
+      <h3><span class="subsection-num">6.5</span> Search Service (Meilisearch)</h3>
+
+      <p>
+        The Search Service wraps Meilisearch to provide <strong>sub-50ms full-text search</strong>
+        with typo tolerance, faceted filtering, and relevance ranking — capabilities that would
+        require significant custom code on top of PostgreSQL's <code>tsvector</code>.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Configuration</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Searchable attributes</strong></td>
+            <td><code>title</code>, <code>description</code>, <code>provider_name</code>, <code>tags</code>, <code>category</code> (in priority order)</td>
+          </tr>
+          <tr>
+            <td><strong>Filterable attributes</strong></td>
+            <td><code>category</code>, <code>skill_level</code>, <code>price_cents</code>, <code>provider_id</code>, <code>is_free</code>, <code>rating_avg</code></td>
+          </tr>
+          <tr>
+            <td><strong>Sortable attributes</strong></td>
+            <td><code>price_cents</code>, <code>rating_avg</code>, <code>enrolled_count</code>, <code>created_at</code></td>
+          </tr>
+          <tr>
+            <td><strong>Typo tolerance</strong></td>
+            <td>Enabled: 1 typo for words 5–8 chars, 2 typos for 9+ chars (Meilisearch default)</td>
+          </tr>
+          <tr>
+            <td><strong>Ranking rules</strong></td>
+            <td><code>words</code> → <code>typo</code> → <code>proximity</code> → <code>attribute</code> → <code>sort</code> → <code>exactness</code> → <code>enrolled_count:desc</code></td>
+          </tr>
+          <tr>
+            <td><strong>Pagination</strong></td>
+            <td>Offset-based, 12 results per page (matches <code>CourseGrid</code> 3×4 layout)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Search Architecture — Two Index Strategy
+  ──────────────────────────────────────────
+
+  ┌─────────────────────────────────────────────────────────────────┐
+  │  Meilisearch Instance (Meilisearch Cloud)                      │
+  │                                                                 │
+  │  ┌──────────────────────────────┐  ┌─────────────────────────┐ │
+  │  │  Index: courses              │  │  Index: courses_swap     │ │
+  │  │  (LIVE — serves queries)     │  │  (STAGING — reindex)     │ │
+  │  │                              │  │                          │ │
+  │  │  • 10,000+ documents         │  │  Built during full       │ │
+  │  │  • Updated incrementally     │  │  reindex, then swapped   │ │
+  │  │    on each course sync       │  │  atomically with live    │ │
+  │  │  • Sub-50ms query response   │  │  index (zero downtime)   │ │
+  │  └──────────────────────────────┘  └─────────────────────────┘ │
+  │                                                                 │
+  │  Index swap: POST /swap-indexes                                │
+  │  { "indexes": ["courses", "courses_swap"] }                    │
+  │  Atomic — no queries are dropped during swap                   │
+  └─────────────────────────────────────────────────────────────────┘
+
+  Update patterns:
+  ─────────────────
+  • Single course changed → Incremental: PUT /indexes/courses/documents
+  • Full reindex needed  → Build courses_swap, then atomic swap
+  • Schema migration     → Build courses_swap with new schema, swap
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.5 — Meilisearch two-index strategy: live index serves queries while staging index handles reindexing</p>
+
+      <div class="callout callout-success">
+        <div class="callout-title">Why Meilisearch Over Algolia or Elasticsearch?</div>
+        <p>
+          <strong>Algolia:</strong> Best-in-class hosted search, but pricing scales per search
+          operation — at high traffic volumes, costs become significant. Meilisearch Cloud offers
+          comparable sub-50ms performance at a fraction of the cost, with the option to self-host
+          if needed.
+        </p>
+        <p style="margin-bottom:0;">
+          <strong>Elasticsearch:</strong> Extremely powerful but operationally heavy — requires
+          cluster management, shard tuning, and JVM configuration. For the Student Hub's use case
+          (full-text search over a course catalog of 10K–100K documents), Elasticsearch is
+          dramatically over-provisioned. Meilisearch is purpose-built for exactly this scale:
+          instant search, faceted navigation, and typo tolerance with zero ops.
+        </p>
+      </div>
+
+      <!-- 6.6 Notification Service -->
+      <h3><span class="subsection-num">6.6</span> Notification Service</h3>
+
+      <p>
+        The Notification Service handles both <strong>in-app notifications</strong> (stored in
+        Postgres, fetched via tRPC) and <strong>transactional emails</strong> (sent via Resend).
+        It is event-driven: other services emit events, and the Notification Service decides what
+        to send and through which channel.
+      </p>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Event Trigger</th>
+            <th>In-App Notification</th>
+            <th>Email (via Resend)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Enrollment confirmed</strong></td>
+            <td>"You're enrolled in [Course]! Start learning now."</td>
+            <td>Purchase confirmation with receipt, course link, and getting-started guide</td>
+          </tr>
+          <tr>
+            <td><strong>Course updated by provider</strong></td>
+            <td>"[Course] has new content — check out the latest module."</td>
+            <td>Weekly digest only (not per-update) to avoid spam</td>
+          </tr>
+          <tr>
+            <td><strong>Course completed</strong></td>
+            <td>"Congratulations! You've completed [Course]. Your certificate is ready."</td>
+            <td>Certificate email with PDF attachment and verification link</td>
+          </tr>
+          <tr>
+            <td><strong>Progress reminder</strong></td>
+            <td>"You're 67% through [Course] — keep it up!"</td>
+            <td>Sent after 7 days of inactivity (configurable, respects unsubscribe)</td>
+          </tr>
+          <tr>
+            <td><strong>Promotional offer</strong></td>
+            <td>"Flash sale: 30% off [Category] courses this week."</td>
+            <td>Marketing email (requires explicit opt-in, CAN-SPAM compliant)</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="diagram">
+        <pre>
+  Notification Service — Event-Driven Architecture
+  ──────────────────────────────────────────────────
+
+  Payment Service ─────┐
+                       │
+  Enrollment Service ──┤   emit(event)    ┌──────────────────────────────┐
+                       ├─────────────────▶│  Notification Service         │
+  Catalog Service ─────┤                  │                              │
+                       │                  │  1. Route event to handler:  │
+  Cron (Vercel) ───────┘                  │     switch(event.type)       │
+                                          │                              │
+                                          │  2. Build notification:      │
+                                          │     • title, body, link      │
+                                          │     • channel(s) to use      │
+                                          │                              │
+                                          │  3. Persist in-app:          │
+                                          │     INSERT INTO notifications│──▶ Postgres
+                                          │     (student_id, type,       │
+                                          │      title, body, link,      │
+                                          │      read: false)            │
+                                          │                              │
+                                          │  4. Send email (if needed):  │
+                                          │     resend.emails.send({     │──▶ Resend API
+                                          │       to, subject,           │
+                                          │       react: &lt;Template /&gt;│
+                                          │     })                       │
+                                          │                              │
+                                          │  Email sending is async and  │
+                                          │  non-blocking — failures are │
+                                          │  retried by Resend, not us.  │
+                                          └──────────────────────────────┘
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.6 — Notification service: event-driven, dual-channel (in-app + email), non-blocking email delivery</p>
+
+      <div class="callout callout-info">
+        <div class="callout-title">Why Resend for Email?</div>
+        <p style="margin-bottom:0;">
+          Resend is chosen over SendGrid or AWS SES for three reasons: <strong>(1)</strong> it has
+          a first-class React integration — email templates are written as React components
+          (<code>@react-email/components</code>), using the same JSX and Tailwind syntax as the
+          rest of the frontend. No separate template language to learn. <strong>(2)</strong> The API
+          is simple: one function call to send, built-in retry logic, and webhook delivery
+          notifications. <strong>(3)</strong> Generous free tier (3,000 emails/month) covers the
+          Student Hub's launch needs, with transparent per-email pricing beyond that.
+        </p>
+      </div>
+
+      <!-- 6.7 Service Communication -->
+      <h3><span class="subsection-num">6.7</span> Inter-Service Communication</h3>
+
+      <p>
+        Because all services run in the same Vercel deployment, inter-service communication is
+        <strong>direct TypeScript function calls</strong> — not HTTP, not message queues, not gRPC.
+        This is the simplest possible approach and is correct for the current scale.
+      </p>
+
+      <div class="diagram">
+        <pre>
+  Communication Pattern — Direct Function Calls
+  ───────────────────────────────────────────────
+
+  // payment.service.ts
+  import { enrollmentService } from './enrollment.service';
+  import { notificationService } from './notification.service';
+  import { catalogService } from './catalog.service';
+
+  async function handlePaymentSuccess(event: StripeWebhookEvent) {
+    // All calls are local function invocations — no network hop
+    const enrollment = await enrollmentService.create({
+      studentId: event.metadata.studentId,
+      courseId: event.metadata.courseId,
+    });
+
+    await catalogService.incrementEnrollmentCount(event.metadata.courseId);
+
+    // Fire-and-forget: email failure shouldn't fail the enrollment
+    notificationService.emit('enrollment.confirmed', {
+      studentId: event.metadata.studentId,
+      courseId: event.metadata.courseId,
+      enrollmentId: enrollment.id,
+    }).catch(err => logger.error('Notification failed', err));
+  }
+
+  ┌─────────────┐  function call  ┌──────────────────┐  function call  ┌────────────────┐
+  │   Payment    │───────────────▶│   Enrollment     │                 │  Notification  │
+  │   Service    │               │   Service         │                 │  Service       │
+  │              │───────────────────────────────────────────────────▶│               │
+  └─────────────┘                └──────────────────┘                 └────────────────┘
+                                                                      (fire-and-forget)
+  Latency: &lt;1ms per call (same process, same event loop)
+  Coupling: TypeScript imports — type-safe, refactor-friendly
+  Trade-off: Cannot scale services independently (acceptable at current scale)
+        </pre>
+      </div>
+      <p class="diagram-caption">Figure 6.7 — Inter-service communication: direct imports, sub-millisecond latency, type-safe contracts</p>
+
+      <div class="callout callout-warning">
+        <div class="callout-title">When to Extract a Service</div>
+        <p style="margin-bottom:0;">
+          The trigger for extracting a module into a separately deployed service is concrete, not
+          speculative: <strong>(1)</strong> the function consistently hits Vercel's 10-second
+          execution limit (e.g., certificate PDF generation for large courses), <strong>(2)</strong>
+          the function needs a different scaling profile (e.g., search indexing bursts during bulk
+          imports), or <strong>(3)</strong> a different team needs to deploy it on an independent
+          cadence. Until one of these triggers fires, extraction is premature complexity. The modular
+          boundaries in the current code make future extraction a straightforward refactor, not a
+          rewrite.
+        </p>
+      </div>
+
+    </section>
+
+    <!-- ──────────────────────────────────────────── -->
+    <!-- SECTION 7–12: Placeholder for iterative dev  -->
     <!-- ──────────────────────────────────────────── -->
 
   </main>
